@@ -113,10 +113,13 @@ pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<usize, Box<dyn s
 
 /// Opens an existing index at `.ns/index/` for reading or incremental writes.
 ///
+/// Reads `meta.json` once and returns it alongside the index, so callers
+/// don't need to re-read it for file_count or other metadata.
+///
 /// Validates `SCHEMA_VERSION` from `meta.json` rather than comparing tantivy `Schema`
 /// objects directly — the latter is fragile across tantivy upgrades where default
 /// options may drift.
-pub fn open_index(root: &Path) -> Result<Index, Box<dyn std::error::Error>> {
+pub fn open_index(root: &Path) -> Result<(Index, IndexMeta), Box<dyn std::error::Error>> {
     let meta = read_meta(root)?;
     if meta.schema_version != SCHEMA_VERSION {
         return Err(format!(
@@ -129,7 +132,7 @@ pub fn open_index(root: &Path) -> Result<Index, Box<dyn std::error::Error>> {
     let index = Index::open_in_dir(&index_dir)?;
 
     register_symbol_tokenizer(&index);
-    Ok(index)
+    Ok((index, meta))
 }
 
 /// Reads `.ns/meta.json`.
