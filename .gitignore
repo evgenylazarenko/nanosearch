@@ -1,2 +1,11 @@
 ns_concept.md
 ns_execution_plan.md
+ns_tracker.md
+
+
+# Added by cargo
+
+/target
+
+# ns index directory
+.ns/
