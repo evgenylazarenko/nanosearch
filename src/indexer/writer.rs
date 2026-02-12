@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tantivy::tokenizer::{LowerCaser, TextAnalyzer, WhitespaceTokenizer};
 use tantivy::{Index, IndexWriter, TantivyDocument};
 
+use crate::error::NsError;
 use crate::schema::{
     build_schema, content_field, lang_field, path_field, symbols_field, symbols_raw_field,
 };
@@ -37,7 +38,7 @@ pub fn register_symbol_tokenizer(index: &Index) {
 ///
 /// Creates `.ns/index/` directory, writes documents, commits, and writes `meta.json`.
 /// Returns the number of files indexed.
-pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<usize, Box<dyn std::error::Error>> {
+pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<usize, NsError> {
     let ns_dir = root.join(".ns");
     let index_dir = ns_dir.join("index");
 
@@ -119,13 +120,13 @@ pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<usize, Box<dyn s
 /// Validates `SCHEMA_VERSION` from `meta.json` rather than comparing tantivy `Schema`
 /// objects directly — the latter is fragile across tantivy upgrades where default
 /// options may drift.
-pub fn open_index(root: &Path) -> Result<(Index, IndexMeta), Box<dyn std::error::Error>> {
+pub fn open_index(root: &Path) -> Result<(Index, IndexMeta), NsError> {
     let meta = read_meta(root)?;
     if meta.schema_version != SCHEMA_VERSION {
-        return Err(format!(
-            "index schema version {} does not match expected version {} — run `ns index` to rebuild",
-            meta.schema_version, SCHEMA_VERSION
-        ).into());
+        return Err(NsError::SchemaVersionMismatch {
+            found: meta.schema_version,
+            expected: SCHEMA_VERSION,
+        });
     }
 
     let index_dir = root.join(".ns").join("index");
@@ -136,7 +137,7 @@ pub fn open_index(root: &Path) -> Result<(Index, IndexMeta), Box<dyn std::error:
 }
 
 /// Reads `.ns/meta.json`.
-pub fn read_meta(root: &Path) -> Result<IndexMeta, Box<dyn std::error::Error>> {
+pub fn read_meta(root: &Path) -> Result<IndexMeta, NsError> {
     let meta_path = root.join(".ns").join("meta.json");
     let content = fs::read_to_string(&meta_path)?;
     let meta: IndexMeta = serde_json::from_str(&content)?;

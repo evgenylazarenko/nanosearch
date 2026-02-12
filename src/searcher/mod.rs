@@ -4,9 +4,17 @@ pub mod query;
 
 use std::path::Path;
 
-use context::extract_context;
-use format::{format_text, DisplayResult};
-use query::{execute_search, SearchStats};
+use crate::error::NsError;
+use context::{extract_context, ContextLine};
+use format::format_text;
+use query::{execute_search, SearchResult, SearchStats};
+
+/// A search result with extracted context lines, ready for display.
+pub struct DisplayResult {
+    pub rank: usize,
+    pub result: SearchResult,
+    pub context_lines: Vec<ContextLine>,
+}
 
 /// Runs the full search pipeline: query → context extraction → text formatting.
 ///
@@ -16,7 +24,7 @@ pub fn search(
     query_str: &str,
     max_results: usize,
     context_window: usize,
-) -> Result<(String, SearchStats), Box<dyn std::error::Error>> {
+) -> Result<(String, SearchStats), NsError> {
     let (results, stats) = execute_search(root, query_str, max_results)?;
 
     let display_results: Vec<DisplayResult> = results

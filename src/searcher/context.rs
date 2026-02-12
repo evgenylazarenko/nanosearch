@@ -81,7 +81,7 @@ pub fn extract_context(
 /// split on non-alphanumeric boundaries, lowercase each token, drop empties.
 fn tokenize_query(query: &str) -> Vec<String> {
     query
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_lowercase())
         .collect()
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(terms, vec!["hashmap", "string"]);
 
         let terms = tokenize_query("foo::bar_baz");
-        assert_eq!(terms, vec!["foo", "bar_baz"]);
+        assert_eq!(terms, vec!["foo", "bar", "baz"]);
 
         let terms = tokenize_query("  spaced   out  ");
         assert_eq!(terms, vec!["spaced", "out"]);

@@ -1,4 +1,3 @@
-use std::io::Read as _;
 use std::path::Path;
 
 use ignore::WalkBuilder;
@@ -67,29 +66,8 @@ pub fn walk_repo(root: &Path, max_file_size: u64) -> Vec<WalkedFile> {
             continue;
         }
 
-        // Binary check: read only the first 512 bytes before committing to a full read.
-        // This avoids loading a large binary file entirely into memory.
-        let mut file_handle = match std::fs::File::open(path) {
-            Ok(f) => f,
-            Err(err) => {
-                eprintln!("warning: cannot open {}: {}", path.display(), err);
-                continue;
-            }
-        };
-        let mut header = [0u8; 512];
-        let header_len = match file_handle.read(&mut header) {
-            Ok(n) => n,
-            Err(err) => {
-                eprintln!("warning: cannot read {}: {}", path.display(), err);
-                continue;
-            }
-        };
-        if header[..header_len].contains(&0) {
-            continue;
-        }
-        drop(file_handle);
-
-        // Full read (now that we know it's likely text)
+        // Single read: max_file_size guard above caps memory usage.
+        // Check first 512 bytes for null bytes (binary detection) on the same buffer.
         let raw = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(err) => {
@@ -97,6 +75,10 @@ pub fn walk_repo(root: &Path, max_file_size: u64) -> Vec<WalkedFile> {
                 continue;
             }
         };
+        let check_len = raw.len().min(512);
+        if raw[..check_len].contains(&0) {
+            continue;
+        }
 
         // UTF-8 check
         let content = match String::from_utf8(raw) {

@@ -6,6 +6,7 @@ use tantivy::query::QueryParser;
 use tantivy::schema::Value;
 use tantivy::{ReloadPolicy, TantivyDocument};
 
+use crate::error::NsError;
 use crate::indexer::writer::open_index;
 use crate::schema::{content_field, lang_field, path_field};
 
@@ -29,16 +30,22 @@ pub struct SearchStats {
     pub elapsed_ms: u64,
 }
 
+/// Maximum number of results to prevent unbounded file I/O during context extraction.
+const MAX_RESULTS_CEILING: usize = 100;
+
 /// Executes a search query against the index at `root`.
 ///
 /// Opens the index (reads `meta.json` once), executes the BM25 query,
 /// and returns ranked results plus stats.
+/// `max_results` is clamped to `MAX_RESULTS_CEILING` (100) to prevent
+/// unbounded disk I/O during context extraction.
 /// Currently searches only the `content` field (symbol boost comes in Phase 4).
 pub fn execute_search(
     root: &Path,
     query_str: &str,
     max_results: usize,
-) -> Result<(Vec<SearchResult>, SearchStats), Box<dyn std::error::Error>> {
+) -> Result<(Vec<SearchResult>, SearchStats), NsError> {
+    let max_results = max_results.min(MAX_RESULTS_CEILING);
     let (index, meta) = open_index(root)?;
 
     let schema = index.schema();

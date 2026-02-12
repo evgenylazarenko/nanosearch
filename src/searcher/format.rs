@@ -1,12 +1,5 @@
-use super::context::ContextLine;
-use super::query::{SearchResult, SearchStats};
-
-/// A search result with extracted context lines, ready for display.
-pub struct DisplayResult {
-    pub rank: usize,
-    pub result: SearchResult,
-    pub context_lines: Vec<ContextLine>,
-}
+use super::DisplayResult;
+use super::query::SearchStats;
 
 /// Formats search results as human-readable text output.
 ///
@@ -67,6 +60,7 @@ mod tests {
     use super::*;
     use crate::searcher::context::ContextLine;
     use crate::searcher::query::{SearchResult, SearchStats};
+    use crate::searcher::DisplayResult;
 
     #[test]
     fn format_single_result() {

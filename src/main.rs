@@ -1,4 +1,5 @@
 mod cmd;
+mod error;
 mod indexer;
 mod schema;
 mod searcher;
