@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::cmd::IndexArgs;
+use crate::error::NsError;
 use crate::indexer;
 
 pub fn run(args: &IndexArgs) {
@@ -25,7 +26,20 @@ pub fn run(args: &IndexArgs) {
     match indexer::run_full_index(&root, args.max_file_size) {
         Ok(_) => {}
         Err(err) => {
-            eprintln!("error: indexing failed: {}", err);
+            match &err {
+                NsError::Io(e) => {
+                    eprintln!("error: I/O failure during indexing: {}", e);
+                }
+                NsError::Tantivy(e) => {
+                    eprintln!("error: index engine failure: {}", e);
+                }
+                NsError::Json(e) => {
+                    eprintln!("error: failed to write index metadata: {}", e);
+                }
+                _ => {
+                    eprintln!("error: indexing failed: {}", err);
+                }
+            }
             std::process::exit(1);
         }
     }

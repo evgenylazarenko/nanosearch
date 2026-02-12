@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::cmd::SearchArgs;
+use crate::error::NsError;
 use crate::searcher;
 
 pub fn run(args: &SearchArgs) {
@@ -12,14 +13,6 @@ pub fn run(args: &SearchArgs) {
         }
     };
 
-    // Quick existence check for actionable error message.
-    // The full meta.json read + schema validation happens inside open_index,
-    // called by execute_search — we don't duplicate it here.
-    if !root.join(".ns").join("meta.json").exists() {
-        eprintln!("error: no index found. Run 'ns index' to create one.");
-        std::process::exit(1);
-    }
-
     match searcher::search(&root, &args.query, args.max_count, args.context) {
         Ok((output, stats)) => {
             print!("{}", output);
@@ -28,7 +21,26 @@ pub fn run(args: &SearchArgs) {
             }
         }
         Err(err) => {
-            eprintln!("error: search failed: {}", err);
+            match &err {
+                NsError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("error: no index found. Run `ns index` to create one.");
+                }
+                NsError::SchemaVersionMismatch { found, expected } => {
+                    eprintln!(
+                        "error: index schema version {} does not match expected {}. Run `ns index` to rebuild.",
+                        found, expected
+                    );
+                }
+                NsError::QueryParse(e) => {
+                    eprintln!("error: invalid query: {}", e);
+                }
+                NsError::Json(_) => {
+                    eprintln!("error: corrupt index metadata. Run `ns index` to rebuild.");
+                }
+                _ => {
+                    eprintln!("error: search failed: {}", err);
+                }
+            }
             std::process::exit(1);
         }
     }
