@@ -8,7 +8,7 @@ use tantivy::{ReloadPolicy, TantivyDocument};
 
 use crate::error::NsError;
 use crate::indexer::writer::open_index;
-use crate::schema::{content_field, lang_field, path_field};
+use crate::schema::{content_field, lang_field, path_field, symbols_field};
 
 /// A single search result from the tantivy index.
 pub struct SearchResult {
@@ -39,7 +39,8 @@ const MAX_RESULTS_CEILING: usize = 100;
 /// and returns ranked results plus stats.
 /// `max_results` is clamped to `MAX_RESULTS_CEILING` (100) to prevent
 /// unbounded disk I/O during context extraction.
-/// Currently searches only the `content` field (symbol boost comes in Phase 4).
+/// Searches both `content` and `symbols` fields, with 3x boost on `symbols`
+/// so that files defining a queried symbol rank above files that merely mention it.
 pub fn execute_search(
     root: &Path,
     query_str: &str,
@@ -50,11 +51,13 @@ pub fn execute_search(
 
     let schema = index.schema();
     let content = content_field(&schema);
+    let symbols_f = symbols_field(&schema);
     let path_f = path_field(&schema);
     let lang_f = lang_field(&schema);
 
-    // Build query parser for content field only (Phase 4 adds symbols with boost)
-    let query_parser = QueryParser::for_index(&index, vec![content]);
+    // Build query parser for content + symbols fields, with 3x boost on symbols
+    let mut query_parser = QueryParser::for_index(&index, vec![content, symbols_f]);
+    query_parser.set_field_boost(symbols_f, 3.0);
     let query = query_parser.parse_query(query_str)?;
 
     let reader = index

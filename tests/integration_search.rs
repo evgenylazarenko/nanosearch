@@ -104,3 +104,88 @@ fn search_context_shows_separators_between_groups() {
         "non-contiguous context groups should be separated by '...'"
     );
 }
+
+// ── Phase 4: Symbol extraction + boost tests ─────────────────────────────────
+
+#[test]
+fn symbol_boost_ranks_definition_file_first() {
+    // "Router" is defined as a class in handlers.ts (symbol match)
+    // and merely referenced as a string in other files (content match only).
+    // With 3x symbol boost, handlers.ts should rank first.
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "Router", 10).expect("search should work");
+
+    assert!(!results.is_empty(), "should find results for 'Router'");
+    assert!(
+        results[0].path.contains("handlers.ts"),
+        "handlers.ts (defines Router class) should rank first, got: {}",
+        results[0].path
+    );
+}
+
+#[test]
+fn symbol_boost_ranks_struct_definition_higher() {
+    // "EventStore" is both a struct name and appears in comments/code across files.
+    // The file that defines it as a struct symbol should rank first.
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "EventStore", 10).expect("search should work");
+
+    assert!(!results.is_empty());
+    assert!(
+        results[0].path.contains("event_store.rs"),
+        "event_store.rs (defines EventStore struct) should rank first, got: {}",
+        results[0].path
+    );
+}
+
+#[test]
+fn symbol_search_finds_python_classes() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "UserRepository", 10)
+            .expect("search should work");
+
+    assert!(!results.is_empty(), "should find results for 'UserRepository'");
+    assert!(
+        results[0].path.contains("models.py"),
+        "models.py (defines UserRepository class) should rank first, got: {}",
+        results[0].path
+    );
+}
+
+#[test]
+fn symbol_search_finds_go_types() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "ServerConfig", 10)
+            .expect("search should work");
+
+    assert!(!results.is_empty(), "should find results for 'ServerConfig'");
+    assert!(
+        results[0].path.contains("server.go"),
+        "server.go (defines ServerConfig type) should rank first, got: {}",
+        results[0].path
+    );
+}
+
+#[test]
+fn symbol_search_finds_js_functions() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "debounce", 10)
+            .expect("search should work");
+
+    assert!(!results.is_empty(), "should find results for 'debounce'");
+    assert!(
+        results[0].path.contains("utils.js"),
+        "utils.js (defines debounce function) should rank first, got: {}",
+        results[0].path
+    );
+}

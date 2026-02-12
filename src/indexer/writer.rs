@@ -11,6 +11,7 @@ use crate::schema::{
     build_schema, content_field, lang_field, path_field, symbols_field, symbols_raw_field,
 };
 
+use super::symbols::extract_symbols;
 use super::walker::WalkedFile;
 
 /// Metadata written to `.ns/meta.json` after indexing.
@@ -24,7 +25,7 @@ pub struct IndexMeta {
 }
 
 /// Current schema version. Bump when schema changes.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Registers the custom "symbol" tokenizer on a tantivy index.
 pub fn register_symbol_tokenizer(index: &Index) {
@@ -67,8 +68,19 @@ pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<usize, NsError> 
     for file in files {
         let mut doc = TantivyDocument::new();
         doc.add_text(content, &file.content);
-        doc.add_text(symbols, "");
-        doc.add_text(symbols_raw, "");
+
+        // Extract symbols via tree-sitter for supported languages
+        let symbol_names = file
+            .lang
+            .as_deref()
+            .map(|l| extract_symbols(l, file.content.as_bytes()))
+            .unwrap_or_default();
+
+        // symbols: space-separated for tokenized search
+        doc.add_text(symbols, &symbol_names.join(" "));
+        // symbols_raw: pipe-separated, original casing, for display
+        doc.add_text(symbols_raw, &symbol_names.join("|"));
+
         doc.add_text(path, &file.rel_path);
         if let Some(ref lang_str) = file.lang {
             doc.add_text(lang, lang_str);

@@ -15,7 +15,7 @@ fn full_index_creates_ns_directory() {
     );
 
     let meta = ns::indexer::writer::read_meta(&root).expect("should read meta.json");
-    assert_eq!(meta.schema_version, 1);
+    assert_eq!(meta.schema_version, 2);
     assert_eq!(meta.file_count, count);
     assert!(meta.index_size_bytes > 0);
     assert!(meta.indexed_at.contains('T'), "indexed_at should be ISO 8601");

@@ -1,4 +1,5 @@
 pub mod language;
+pub mod symbols;
 pub mod walker;
 pub mod writer;
 
