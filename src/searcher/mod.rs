@@ -10,6 +10,7 @@ use format::{format_files_only, format_json, format_text};
 use query::{execute_search, SearchOptions, SearchResult, SearchStats};
 
 /// A search result with extracted context lines, ready for display.
+#[derive(Debug)]
 pub struct DisplayResult {
     pub rank: usize,
     pub result: SearchResult,
@@ -51,7 +52,7 @@ pub fn search(
         OutputMode::Text => {
             let display_results =
                 build_display_results(root, results, query_str, opts.context_window);
-            let output = format_text(&display_results, &stats);
+            let output = format_text(&display_results);
             Ok((output, stats))
         }
     }

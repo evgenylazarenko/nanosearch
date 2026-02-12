@@ -13,6 +13,7 @@ use crate::indexer::writer::open_index;
 use crate::schema::{content_field, lang_field, path_field, symbols_field, symbols_raw_field};
 
 /// A single search result from the tantivy index.
+#[derive(Debug)]
 pub struct SearchResult {
     /// File path relative to the repo root.
     pub path: String,
@@ -25,6 +26,7 @@ pub struct SearchResult {
 }
 
 /// Summary statistics for a search operation.
+#[derive(Debug)]
 pub struct SearchStats {
     /// Number of results returned.
     pub total_results: usize,
@@ -35,6 +37,7 @@ pub struct SearchStats {
 }
 
 /// Options that control search behaviour — maps 1:1 to CLI flags.
+#[derive(Debug)]
 pub struct SearchOptions {
     /// Maximum number of results.
     pub max_results: usize,

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::cmd::SearchArgs;
 use crate::error::NsError;
 use crate::searcher;
+use crate::searcher::format::format_summary;
 use crate::searcher::query::SearchOptions;
 use crate::searcher::OutputMode;
 
@@ -15,6 +16,7 @@ pub fn run(args: &SearchArgs) {
         }
     };
 
+    let is_json = args.json;
     let output_mode = if args.files_only {
         OutputMode::FilesOnly
     } else if args.json {
@@ -34,20 +36,27 @@ pub fn run(args: &SearchArgs) {
 
     match searcher::search(&root, &args.query, output_mode, &opts) {
         Ok((output, stats)) => {
-            print!("{}", output);
             if stats.total_results == 0 {
+                // JSON mode: print the body to stdout (structured data for consumers)
+                if is_json {
+                    print!("{}", output);
+                }
+                // Summary to stderr — consistent with exit 1 (rg convention)
+                eprintln!("{}", format_summary(&stats));
                 std::process::exit(1);
+            } else {
+                print!("{}", output);
+                eprintln!("{}", format_summary(&stats));
             }
         }
         Err(err) => {
             match &err {
                 NsError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!("error: no index found. Run `ns index` to create one.");
+                    eprintln!("error: no index found. Run 'ns index' to create one.");
                 }
-                NsError::SchemaVersionMismatch { found, expected } => {
+                NsError::SchemaVersionMismatch { .. } => {
                     eprintln!(
-                        "error: index schema version {} does not match expected {}. Run `ns index` to rebuild.",
-                        found, expected
+                        "error: index was built with an older version of ns. Run 'ns index' to rebuild."
                     );
                 }
                 NsError::QueryParse(e) => {
@@ -57,7 +66,10 @@ pub fn run(args: &SearchArgs) {
                     eprintln!("error: invalid glob pattern: {}", e);
                 }
                 NsError::Json(_) => {
-                    eprintln!("error: corrupt index metadata. Run `ns index` to rebuild.");
+                    eprintln!("error: corrupt index metadata. Run 'ns index' to rebuild.");
+                }
+                _ if err.is_lock_error() => {
+                    eprintln!("error: index is locked by another process.");
                 }
                 _ => {
                     eprintln!("error: search failed: {}", err);

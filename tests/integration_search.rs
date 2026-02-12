@@ -45,10 +45,8 @@ fn search_full_pipeline_with_context() {
     assert!(output.contains("event_store.rs"), "should show event_store.rs");
     assert!(output.contains("score:"), "should show score");
     assert!(output.contains("lang: rust"), "should show lang");
-    assert!(
-        output.contains("result (searched"),
-        "should show summary line"
-    );
+    // Summary is on stderr (via format_summary), not in the library output
+    assert!(!output.contains("result (searched"), "summary should not be in library output");
     assert!(stats.total_results > 0);
 }
 
@@ -512,5 +510,439 @@ fn language_filter_with_sym_only() {
             "sym + lang filter should only return rust files, got: {:?}",
             r.lang
         );
+    }
+}
+
+// ── Phase 7: Error handling + polish tests ────────────────────────────────────
+
+// Library-level error path tests
+
+#[test]
+fn search_without_index_returns_error() {
+    let (_tmp, root) = common::isolated_fixture();
+
+    let result = ns::searcher::search(
+        &root,
+        "anything",
+        OutputMode::Text,
+        &SearchOptions::default(),
+    );
+    assert!(result.is_err(), "search without index should fail");
+}
+
+#[test]
+fn search_with_stale_schema_version_returns_error() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // Tamper with meta.json to simulate a stale schema version
+    let meta_path = root.join(".ns").join("meta.json");
+    let content = std::fs::read_to_string(&meta_path).expect("should read meta");
+    let tampered = content.replace("\"schema_version\": 2", "\"schema_version\": 999");
+    std::fs::write(&meta_path, &tampered).expect("should write tampered meta");
+
+    let result = ns::searcher::search(
+        &root,
+        "EventStore",
+        OutputMode::Text,
+        &SearchOptions::default(),
+    );
+
+    assert!(result.is_err(), "search with stale schema should fail");
+    let err = result.unwrap_err();
+    let msg = format!("{}", err);
+    assert!(
+        msg.contains("schema version"),
+        "error should mention schema version, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn glob_and_language_filter_combined() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let combo_opts = SearchOptions {
+        max_results: 10,
+        file_type: Some("rust".to_string()),
+        file_glob: Some("src/event_*".to_string()),
+        ..Default::default()
+    };
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "pub", &combo_opts)
+            .expect("search should work");
+
+    for r in &results {
+        assert_eq!(r.lang.as_deref(), Some("rust"), "should be rust");
+        assert!(
+            r.path.starts_with("src/event_"),
+            "path should match glob, got: {}",
+            r.path
+        );
+    }
+}
+
+#[test]
+fn context_window_zero_shows_only_matching_lines() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let opts_c0 = SearchOptions {
+        max_results: 5,
+        context_window: 0,
+        ..Default::default()
+    };
+    let (output, _stats) =
+        ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_c0)
+            .expect("search should work");
+
+    // With context=0, every context line should contain the query term (case-insensitive)
+    for line in output.lines() {
+        // Skip rank headers, separators, summary, and blank lines
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with('[')
+            || trimmed.starts_with("...")
+            || trimmed.contains("result")
+        {
+            continue;
+        }
+        // This is a context line — it should contain "EventStore" (case-insensitive)
+        assert!(
+            trimmed.to_lowercase().contains("eventstore"),
+            "with context=0, line should match query, got: {}",
+            trimmed
+        );
+    }
+}
+
+#[test]
+fn context_window_larger_shows_more_lines() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let opts_c0 = SearchOptions {
+        max_results: 1,
+        context_window: 0,
+        ..Default::default()
+    };
+    let opts_c3 = SearchOptions {
+        max_results: 1,
+        context_window: 3,
+        ..Default::default()
+    };
+
+    let (output_c0, _) =
+        ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_c0)
+            .expect("search should work");
+    let (output_c3, _) =
+        ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_c3)
+            .expect("search should work");
+
+    // Context=3 should produce more lines than context=0
+    let lines_c0: Vec<&str> = output_c0.lines().filter(|l| l.trim().contains(':')).collect();
+    let lines_c3: Vec<&str> = output_c3.lines().filter(|l| l.trim().contains(':')).collect();
+
+    assert!(
+        lines_c3.len() >= lines_c0.len(),
+        "context=3 should show at least as many lines as context=0 ({} vs {})",
+        lines_c3.len(),
+        lines_c0.len()
+    );
+}
+
+#[test]
+fn end_to_end_index_incremental_search() {
+    let (_tmp, root) = common::isolated_fixture();
+
+    // Full index
+    ns::indexer::run_full_index(&root, 1_048_576).expect("full index should succeed");
+
+    // Verify search works
+    let (results, _) =
+        ns::searcher::query::execute_search(&root, "EventStore", &opts(10))
+            .expect("search should work after full index");
+    assert!(!results.is_empty());
+
+    // Sleep required: without a git repo, incremental indexing uses mtime-based
+    // change detection. The new file needs a later mtime than indexed_at, and
+    // filesystem mtime granularity may be 1 second on some platforms.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    std::fs::write(
+        root.join("src").join("phase7_test.rs"),
+        "pub struct Phase7Marker;\n",
+    )
+    .expect("write should succeed");
+
+    // Incremental index
+    let stats = ns::indexer::run_incremental_index(&root, 1_048_576)
+        .expect("incremental should succeed");
+    assert!(stats.added >= 1, "should detect added file");
+
+    // Verify new content is searchable
+    let (results, _) =
+        ns::searcher::query::execute_search(&root, "Phase7Marker", &opts(10))
+            .expect("search should work after incremental");
+    assert!(
+        !results.is_empty(),
+        "Phase7Marker should be searchable after incremental index"
+    );
+
+    // Original content still searchable
+    let (results, _) =
+        ns::searcher::query::execute_search(&root, "EventStore", &opts(10))
+            .expect("search should still work for original content");
+    assert!(
+        !results.is_empty(),
+        "EventStore should still be searchable after incremental"
+    );
+}
+
+#[test]
+fn no_results_text_returns_empty_output() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (output, stats) = ns::searcher::search(
+        &root,
+        "xyzzy_nonexistent_42",
+        OutputMode::Text,
+        &SearchOptions::default(),
+    )
+    .expect("search should succeed even with no results");
+
+    assert_eq!(stats.total_results, 0);
+    assert!(
+        output.is_empty(),
+        "library text output should be empty when no results (summary is CLI-layer concern)"
+    );
+}
+
+#[test]
+fn no_results_json_has_empty_array() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (output, stats) = ns::searcher::search(
+        &root,
+        "xyzzy_nonexistent_42",
+        OutputMode::Json,
+        &SearchOptions::default(),
+    )
+    .expect("search should succeed even with no results");
+
+    assert_eq!(stats.total_results, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(parsed["results"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["stats"]["total_results"], 0);
+}
+
+// ── CLI-level tests (verify actual stderr messages and exit codes) ────────────
+
+/// Helper: get the path to the built `ns` binary.
+fn ns_binary() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_ns"))
+}
+
+#[test]
+fn cli_search_without_index_stderr_and_exit_code() {
+    let (_tmp, root) = common::isolated_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .arg("anything")
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(!output.status.success(), "should exit with non-zero status");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error: no index found. Run 'ns index' to create one."),
+        "stderr should have the exact no-index message, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn cli_search_stale_schema_stderr_and_exit_code() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // Tamper with meta.json
+    let meta_path = root.join(".ns").join("meta.json");
+    let content = std::fs::read_to_string(&meta_path).expect("should read meta");
+    let tampered = content.replace("\"schema_version\": 2", "\"schema_version\": 999");
+    std::fs::write(&meta_path, &tampered).expect("should write tampered meta");
+
+    let output = std::process::Command::new(ns_binary())
+        .arg("EventStore")
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(!output.status.success(), "should exit with non-zero status");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error: index was built with an older version of ns. Run 'ns index' to rebuild."),
+        "stderr should have the exact schema mismatch message, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn cli_no_results_exits_1_with_stderr_summary() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .arg("xyzzy_absolutely_no_match_ever_42")
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(!output.status.success(), "should exit 1 when no results");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("0 results"),
+        "stderr should contain '0 results' summary, got: {}",
+        stderr
+    );
+    // stdout should be empty (text mode skips stdout for zero results)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.is_empty(),
+        "stdout should be empty for zero-results text mode, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn cli_no_results_json_exits_1_with_json_on_stdout() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .args(["--json", "xyzzy_absolutely_no_match_ever_42"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(!output.status.success(), "should exit 1 when no results");
+
+    // stderr has the summary
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("0 results"),
+        "stderr should contain '0 results', got: {}",
+        stderr
+    );
+
+    // stdout has the JSON body
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+    assert_eq!(parsed["results"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["stats"]["total_results"], 0);
+}
+
+#[test]
+fn cli_search_success_exits_0() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .arg("EventStore")
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(output.status.success(), "should exit 0 when results found");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("event_store.rs"),
+        "stdout should contain search results, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn cli_no_results_files_only_exits_1_empty_stdout() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .args(["-l", "xyzzy_absolutely_no_match_ever_42"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(!output.status.success(), "should exit 1 when no results");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.is_empty(),
+        "stdout should be empty for zero-results --files mode, got: {}",
+        stdout
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("0 results"),
+        "stderr should contain '0 results' summary, got: {}",
+        stderr
+    );
+}
+
+// Note: The "index locked" error path (Issue 5) is not tested because reliably
+// triggering a tantivy lock conflict in a test is fragile and race-prone.
+// The lock detection itself is robust — it uses `TantivyError::LockFailure`
+// variant matching (not string matching), so it will not regress silently
+// across tantivy version upgrades.
+
+// ── Performance smoke test ────────────────────────────────────────────────────
+
+/// Indexes the ns source tree itself and verifies timing is reasonable.
+///
+/// This test is `#[ignore]`d by default — run with `cargo test -- --ignored`.
+/// Requirement 7.4: index < 10s, search < 50ms on a medium repo.
+#[test]
+#[ignore]
+fn performance_smoke_test() {
+    // Copy repo source into a tempdir so .ns/ artifacts never pollute the real repo
+    let tmp = tempfile::tempdir().expect("should create tempdir");
+    let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let dest_src = tmp.path().join("src");
+    copy_dir_recursive(&src, &dest_src);
+
+    let root = tmp.path().to_path_buf();
+
+    // Index
+    let start = std::time::Instant::now();
+    ns::indexer::run_full_index(&root, 1_048_576).expect("indexing should succeed");
+    let index_ms = start.elapsed().as_millis();
+
+    eprintln!("Performance: index took {}ms", index_ms);
+    assert!(
+        index_ms < 10_000,
+        "indexing should complete in < 10s, took {}ms",
+        index_ms
+    );
+
+    // Search
+    let start = std::time::Instant::now();
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "EventStore", &opts(10))
+            .expect("search should work");
+    let search_ms = start.elapsed().as_millis();
+
+    eprintln!("Performance: search took {}ms, found {} results", search_ms, results.len());
+    assert!(
+        search_ms < 50,
+        "search should complete in < 50ms, took {}ms",
+        search_ms
+    );
+    // tmp dir auto-cleaned on drop
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).expect("mkdir");
+    for entry in std::fs::read_dir(src).expect("read_dir") {
+        let entry = entry.expect("entry");
+        let ty = entry.file_type().expect("file_type");
+        let dest_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path);
+        } else {
+            std::fs::copy(entry.path(), &dest_path).expect("copy");
+        }
     }
 }

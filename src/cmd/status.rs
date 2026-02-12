@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use crate::indexer::writer::read_meta;
+use crate::error::NsError;
+use crate::indexer::writer::{read_meta, SCHEMA_VERSION};
 
 pub fn run() {
     let root = match PathBuf::from(".").canonicalize() {
@@ -13,11 +14,26 @@ pub fn run() {
 
     let meta = match read_meta(&root) {
         Ok(m) => m,
-        Err(_) => {
-            eprintln!("No index found. Run `ns index` to create one.");
+        Err(NsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("error: no index found. Run 'ns index' to create one.");
+            std::process::exit(1);
+        }
+        Err(NsError::Json(_)) => {
+            eprintln!("error: corrupt index metadata. Run 'ns index' to rebuild.");
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("error: failed to read index: {}", err);
             std::process::exit(1);
         }
     };
+
+    if meta.schema_version != SCHEMA_VERSION {
+        eprintln!(
+            "warning: index schema version {} does not match current version {}. Run 'ns index' to rebuild.",
+            meta.schema_version, SCHEMA_VERSION
+        );
+    }
 
     println!("ns index status");
     println!("  schema version : {}", meta.schema_version);

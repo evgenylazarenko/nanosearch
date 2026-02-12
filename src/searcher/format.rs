@@ -9,7 +9,7 @@ use super::query::{SearchResult, SearchStats};
 ///      42: matching line content
 ///      43:     next line
 /// ```
-pub fn format_text(results: &[DisplayResult], stats: &SearchStats) -> String {
+pub fn format_text(results: &[DisplayResult]) -> String {
     let mut out = String::new();
 
     for display in results {
@@ -44,15 +44,20 @@ pub fn format_text(results: &[DisplayResult], stats: &SearchStats) -> String {
         out.push('\n');
     }
 
-    // Summary line (correct pluralization)
+    out
+}
+
+/// Formats the search summary line (e.g. "3 results (searched 42 files in 2ms)").
+///
+/// Separated from `format_text` so the CLI layer can direct this to stderr,
+/// keeping stdout reserved for result data only.
+pub fn format_summary(stats: &SearchStats) -> String {
     let result_word = if stats.total_results == 1 { "result" } else { "results" };
     let file_word = if stats.files_searched == 1 { "file" } else { "files" };
-    out.push_str(&format!(
-        "{} {} (searched {} {} in {}ms)\n",
+    format!(
+        "{} {} (searched {} {} in {}ms)",
         stats.total_results, result_word, stats.files_searched, file_word, stats.elapsed_ms
-    ));
-
-    out
+    )
 }
 
 /// Formats search results as bare file paths, one per line.
@@ -182,31 +187,45 @@ mod tests {
                 },
             ],
         }];
-        let stats = SearchStats {
-            total_results: 1,
-            files_searched: 42,
-            elapsed_ms: 3,
-        };
 
-        let output = format_text(&results, &stats);
+        let output = format_text(&results);
         assert!(output.contains("[1] src/main.rs"));
         assert!(output.contains("score: 8.5"));
         assert!(output.contains("lang: rust"));
         assert!(output.contains("  10: fn main()"));
-        assert!(output.contains("1 result (searched 42 files in 3ms)"));
+        // Summary is no longer part of format_text — see format_summary
+        assert!(!output.contains("result (searched"), "summary should not be in format_text output");
     }
 
     #[test]
     fn format_no_results() {
         let results = vec![];
+        let output = format_text(&results);
+        assert!(output.is_empty(), "format_text with no results should return empty string");
+    }
+
+    #[test]
+    fn format_summary_correct() {
         let stats = SearchStats {
+            total_results: 3,
+            files_searched: 42,
+            elapsed_ms: 2,
+        };
+        assert_eq!(format_summary(&stats), "3 results (searched 42 files in 2ms)");
+
+        let stats_one = SearchStats {
+            total_results: 1,
+            files_searched: 1,
+            elapsed_ms: 0,
+        };
+        assert_eq!(format_summary(&stats_one), "1 result (searched 1 file in 0ms)");
+
+        let stats_zero = SearchStats {
             total_results: 0,
             files_searched: 100,
             elapsed_ms: 1,
         };
-
-        let output = format_text(&results, &stats);
-        assert!(output.contains("0 results (searched 100 files"));
+        assert_eq!(format_summary(&stats_zero), "0 results (searched 100 files in 1ms)");
     }
 
     #[test]
@@ -226,9 +245,7 @@ mod tests {
                 ContextLine { line_number: 10, text: "fn foo() {}".to_string() },
             ],
         }];
-        let stats = SearchStats { total_results: 1, files_searched: 1, elapsed_ms: 0 };
-
-        let output = format_text(&results, &stats);
+        let output = format_text(&results);
         assert!(output.contains("..."), "should have separator between non-contiguous groups");
         // Separator should appear between line 4 and line 10, not before line 3
         let lines: Vec<&str> = output.lines().collect();
@@ -253,9 +270,7 @@ mod tests {
                 ContextLine { line_number: 3, text: "line3".to_string() },
             ],
         }];
-        let stats = SearchStats { total_results: 1, files_searched: 1, elapsed_ms: 0 };
-
-        let output = format_text(&results, &stats);
+        let output = format_text(&results);
         assert!(!output.contains("..."), "contiguous lines should have no separator");
     }
 
@@ -271,13 +286,7 @@ mod tests {
             },
             context_lines: vec![],
         }];
-        let stats = SearchStats {
-            total_results: 1,
-            files_searched: 10,
-            elapsed_ms: 0,
-        };
-
-        let output = format_text(&results, &stats);
+        let output = format_text(&results);
         assert!(output.contains("lang: unknown"));
     }
 

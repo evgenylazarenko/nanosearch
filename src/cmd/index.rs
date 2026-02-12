@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::cmd::IndexArgs;
 use crate::error::NsError;
 use crate::indexer;
+use crate::indexer::writer::check_gitignore_warning;
 
 pub fn run(args: &IndexArgs) {
     let root = args
@@ -27,9 +28,18 @@ pub fn run(args: &IndexArgs) {
 
 fn run_full(root: &std::path::Path, max_file_size: u64) {
     match indexer::run_full_index(root, max_file_size) {
-        Ok(_) => {}
+        Ok(None) => {
+            eprintln!("No indexable files found.");
+        }
+        Ok(Some(stats)) => {
+            eprintln!("Indexed {} files in {}ms", stats.file_count, stats.elapsed_ms);
+            check_gitignore_warning(root);
+        }
         Err(err) => {
             match &err {
+                _ if err.is_lock_error() => {
+                    eprintln!("error: index is locked by another process.");
+                }
                 NsError::Io(e) => {
                     eprintln!("error: I/O failure during indexing: {}", e);
                 }
@@ -59,25 +69,23 @@ fn run_incremental(root: &std::path::Path, max_file_size: u64) {
                     stats.added, stats.modified, stats.deleted, stats.elapsed_ms
                 );
             }
+            check_gitignore_warning(root);
         }
         Err(err) => {
             match &err {
                 NsError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!("error: no index found. Run `ns index` first (without --incremental).");
+                    eprintln!("error: no index found. Run 'ns index' first (without --incremental).");
                 }
-                NsError::SchemaVersionMismatch { found, expected } => {
+                NsError::SchemaVersionMismatch { .. } => {
                     eprintln!(
-                        "error: index schema version {} does not match expected {}. Run `ns index` to rebuild.",
-                        found, expected
+                        "error: index was built with an older version of ns. Run 'ns index' to rebuild."
                     );
                 }
+                _ if err.is_lock_error() => {
+                    eprintln!("error: index is locked by another process.");
+                }
                 NsError::Tantivy(e) => {
-                    let msg = format!("{}", e);
-                    if msg.contains("lock") || msg.contains("Lock") {
-                        eprintln!("error: index is locked by another process.");
-                    } else {
-                        eprintln!("error: index engine failure: {}", e);
-                    }
+                    eprintln!("error: index engine failure: {}", e);
                 }
                 NsError::Io(e) => {
                     eprintln!("error: I/O failure during incremental indexing: {}", e);

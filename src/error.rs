@@ -80,3 +80,17 @@ impl From<glob::PatternError> for NsError {
         NsError::Glob(e)
     }
 }
+
+impl NsError {
+    /// Returns `true` if this error is a tantivy lock-acquisition failure.
+    ///
+    /// Uses variant matching on `TantivyError::LockFailure` rather than
+    /// string matching, so it is robust across tantivy versions.
+    pub fn is_lock_error(&self) -> bool {
+        matches!(
+            self,
+            NsError::Tantivy(tantivy::TantivyError::LockFailure(..))
+                | NsError::Tantivy(tantivy::TantivyError::Poisoned)
+        )
+    }
+}

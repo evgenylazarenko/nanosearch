@@ -27,6 +27,13 @@ pub struct IndexMeta {
 /// Current schema version. Bump when schema changes.
 pub const SCHEMA_VERSION: u32 = 2;
 
+/// Stats returned by a full index build.
+#[derive(Debug)]
+pub struct FullIndexStats {
+    pub file_count: usize,
+    pub elapsed_ms: u64,
+}
+
 /// Registers the custom "symbol" tokenizer on a tantivy index.
 pub fn register_symbol_tokenizer(index: &Index) {
     let tokenizer = TextAnalyzer::builder(WhitespaceTokenizer::default())
@@ -38,8 +45,8 @@ pub fn register_symbol_tokenizer(index: &Index) {
 /// Builds the tantivy index from walked files.
 ///
 /// Creates `.ns/index/` directory, writes documents, commits, and writes `meta.json`.
-/// Returns the number of files indexed.
-pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<usize, NsError> {
+/// Returns index stats (file count, elapsed time). Does not print to stderr.
+pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<FullIndexStats, NsError> {
     let ns_dir = root.join(".ns");
     let index_dir = ns_dir.join("index");
 
@@ -112,16 +119,10 @@ pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<usize, NsError> 
     let meta_json = serde_json::to_string_pretty(&meta)?;
     fs::write(&meta_path, &meta_json)?;
 
-    eprintln!(
-        "Indexed {} files in {}ms",
+    Ok(FullIndexStats {
         file_count,
-        elapsed.as_millis()
-    );
-
-    // Check if .ns/ is in .gitignore
-    check_gitignore_warning(root);
-
-    Ok(file_count)
+        elapsed_ms: elapsed.as_millis() as u64,
+    })
 }
 
 /// Opens an existing index at `.ns/index/` for reading or incremental writes.
@@ -218,7 +219,11 @@ pub(crate) fn utc_timestamp_iso8601() -> String {
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, hours, minutes, seconds)
 }
 
-fn check_gitignore_warning(root: &Path) {
+pub fn check_gitignore_warning(root: &Path) {
+    // Only warn in git repositories — non-git dirs have no .gitignore to update
+    if !root.join(".git").exists() {
+        return;
+    }
     let gitignore_path = root.join(".gitignore");
     if gitignore_path.exists() {
         if let Ok(content) = fs::read_to_string(&gitignore_path) {

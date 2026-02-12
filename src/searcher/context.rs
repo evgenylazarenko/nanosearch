@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 /// A single line from a matched file, with its 1-based line number.
+#[derive(Debug)]
 pub struct ContextLine {
     pub line_number: usize,
     pub text: String,
