@@ -17,6 +17,8 @@ pub enum NsError {
     Json(serde_json::Error),
     /// Index schema version does not match the current binary.
     SchemaVersionMismatch { found: u32, expected: u32 },
+    /// Invalid glob pattern passed via `-g`/`--glob`.
+    Glob(glob::PatternError),
 }
 
 impl fmt::Display for NsError {
@@ -31,6 +33,7 @@ impl fmt::Display for NsError {
                 "index schema version {} does not match expected version {} — run `ns index` to rebuild",
                 found, expected
             ),
+            NsError::Glob(e) => write!(f, "invalid glob pattern: {}", e),
         }
     }
 }
@@ -43,6 +46,7 @@ impl std::error::Error for NsError {
             NsError::QueryParse(e) => Some(e),
             NsError::Json(e) => Some(e),
             NsError::SchemaVersionMismatch { .. } => None,
+            NsError::Glob(e) => Some(e),
         }
     }
 }
@@ -68,5 +72,11 @@ impl From<tantivy::query::QueryParserError> for NsError {
 impl From<serde_json::Error> for NsError {
     fn from(e: serde_json::Error) -> Self {
         NsError::Json(e)
+    }
+}
+
+impl From<glob::PatternError> for NsError {
+    fn from(e: glob::PatternError) -> Self {
+        NsError::Glob(e)
     }
 }

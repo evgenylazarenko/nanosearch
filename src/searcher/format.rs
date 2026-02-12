@@ -1,5 +1,5 @@
 use super::DisplayResult;
-use super::query::SearchStats;
+use super::query::{SearchResult, SearchStats};
 
 /// Formats search results as human-readable text output.
 ///
@@ -55,6 +55,105 @@ pub fn format_text(results: &[DisplayResult], stats: &SearchStats) -> String {
     out
 }
 
+/// Formats search results as bare file paths, one per line.
+///
+/// Used with `-l`/`--files` flag. No scores, no context, no decoration.
+pub fn format_files_only(results: &[SearchResult]) -> String {
+    let mut out = String::new();
+    for r in results {
+        out.push_str(&r.path);
+        out.push('\n');
+    }
+    out
+}
+
+/// Formats search results as a JSON object.
+///
+/// Structure:
+/// ```json
+/// {
+///   "query": "EventStore",
+///   "results": [
+///     {
+///       "rank": 1,
+///       "path": "src/event_store.rs",
+///       "score": 12.4,
+///       "lang": "rust",
+///       "matched_symbols": ["EventStore"],
+///       "lines": [
+///         { "num": 5, "text": "pub struct EventStore {" }
+///       ]
+///     }
+///   ],
+///   "stats": {
+///     "total_results": 3,
+///     "files_searched": 42,
+///     "elapsed_ms": 7
+///   }
+/// }
+/// ```
+pub fn format_json(
+    results: &[DisplayResult],
+    stats: &SearchStats,
+    query_str: &str,
+) -> String {
+    // Tokenize query for matched_symbols intersection
+    let query_terms: Vec<String> = query_str
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect();
+
+    let result_values: Vec<serde_json::Value> = results
+        .iter()
+        .map(|d| {
+            // Case-insensitive intersection: symbols whose lowercase matches a query term
+            let matched: Vec<&str> = d
+                .result
+                .symbols_raw
+                .iter()
+                .filter(|sym| {
+                    let lower = sym.to_lowercase();
+                    query_terms.iter().any(|qt| lower.contains(qt))
+                })
+                .map(|s| s.as_str())
+                .collect();
+
+            let lines: Vec<serde_json::Value> = d
+                .context_lines
+                .iter()
+                .map(|cl| {
+                    serde_json::json!({
+                        "num": cl.line_number,
+                        "text": cl.text,
+                    })
+                })
+                .collect();
+
+            serde_json::json!({
+                "rank": d.rank,
+                "path": d.result.path,
+                "score": d.result.score,
+                "lang": d.result.lang,
+                "matched_symbols": matched,
+                "lines": lines,
+            })
+        })
+        .collect();
+
+    let json = serde_json::json!({
+        "query": query_str,
+        "results": result_values,
+        "stats": {
+            "total_results": stats.total_results,
+            "files_searched": stats.files_searched,
+            "elapsed_ms": stats.elapsed_ms,
+        },
+    });
+
+    serde_json::to_string_pretty(&json).unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +169,7 @@ mod tests {
                 path: "src/main.rs".to_string(),
                 score: 8.5,
                 lang: Some("rust".to_string()),
+                symbols_raw: vec!["main".to_string()],
             },
             context_lines: vec![
                 ContextLine {
@@ -117,6 +217,7 @@ mod tests {
                 path: "src/lib.rs".to_string(),
                 score: 5.0,
                 lang: Some("rust".to_string()),
+                symbols_raw: vec![],
             },
             context_lines: vec![
                 ContextLine { line_number: 3, text: "use foo;".to_string() },
@@ -144,6 +245,7 @@ mod tests {
                 path: "src/lib.rs".to_string(),
                 score: 5.0,
                 lang: Some("rust".to_string()),
+                symbols_raw: vec![],
             },
             context_lines: vec![
                 ContextLine { line_number: 1, text: "line1".to_string() },
@@ -165,6 +267,7 @@ mod tests {
                 path: "README.md".to_string(),
                 score: 2.0,
                 lang: None,
+                symbols_raw: vec![],
             },
             context_lines: vec![],
         }];
@@ -176,5 +279,84 @@ mod tests {
 
         let output = format_text(&results, &stats);
         assert!(output.contains("lang: unknown"));
+    }
+
+    #[test]
+    fn format_files_only_bare_paths() {
+        let results = vec![
+            SearchResult {
+                path: "src/main.rs".to_string(),
+                score: 8.5,
+                lang: Some("rust".to_string()),
+                symbols_raw: vec![],
+            },
+            SearchResult {
+                path: "src/lib.rs".to_string(),
+                score: 5.0,
+                lang: Some("rust".to_string()),
+                symbols_raw: vec![],
+            },
+        ];
+
+        let output = format_files_only(&results);
+        assert_eq!(output, "src/main.rs\nsrc/lib.rs\n");
+    }
+
+    #[test]
+    fn format_json_structure() {
+        let results = vec![DisplayResult {
+            rank: 1,
+            result: SearchResult {
+                path: "src/event_store.rs".to_string(),
+                score: 12.4,
+                lang: Some("rust".to_string()),
+                symbols_raw: vec!["EventStore".to_string(), "new".to_string()],
+            },
+            context_lines: vec![
+                ContextLine {
+                    line_number: 5,
+                    text: "pub struct EventStore {".to_string(),
+                },
+            ],
+        }];
+        let stats = SearchStats {
+            total_results: 1,
+            files_searched: 42,
+            elapsed_ms: 7,
+        };
+
+        let output = format_json(&results, &stats, "EventStore");
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("should be valid JSON");
+
+        assert_eq!(parsed["query"], "EventStore");
+        assert_eq!(parsed["results"][0]["rank"], 1);
+        assert_eq!(parsed["results"][0]["path"], "src/event_store.rs");
+        assert_eq!(parsed["results"][0]["lang"], "rust");
+        assert_eq!(parsed["results"][0]["matched_symbols"][0], "EventStore");
+        assert_eq!(parsed["results"][0]["lines"][0]["num"], 5);
+        assert_eq!(parsed["stats"]["total_results"], 1);
+        assert_eq!(parsed["stats"]["files_searched"], 42);
+    }
+
+    #[test]
+    fn format_json_matched_symbols_case_insensitive() {
+        let results = vec![DisplayResult {
+            rank: 1,
+            result: SearchResult {
+                path: "src/foo.rs".to_string(),
+                score: 5.0,
+                lang: Some("rust".to_string()),
+                symbols_raw: vec!["EventStore".to_string(), "unrelated_fn".to_string()],
+            },
+            context_lines: vec![],
+        }];
+        let stats = SearchStats { total_results: 1, files_searched: 1, elapsed_ms: 0 };
+
+        // Query "eventstore" (lowercase) should match "EventStore" (original case)
+        let output = format_json(&results, &stats, "eventstore");
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let matched = parsed["results"][0]["matched_symbols"].as_array().unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0], "EventStore");
     }
 }

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use crate::cmd::SearchArgs;
 use crate::error::NsError;
 use crate::searcher;
+use crate::searcher::query::SearchOptions;
+use crate::searcher::OutputMode;
 
 pub fn run(args: &SearchArgs) {
     let root = match PathBuf::from(".").canonicalize() {
@@ -13,7 +15,24 @@ pub fn run(args: &SearchArgs) {
         }
     };
 
-    match searcher::search(&root, &args.query, args.max_count, args.context) {
+    let output_mode = if args.files_only {
+        OutputMode::FilesOnly
+    } else if args.json {
+        OutputMode::Json
+    } else {
+        OutputMode::Text
+    };
+
+    let opts = SearchOptions {
+        max_results: args.max_count,
+        context_window: args.context,
+        file_type: args.file_type.clone(),
+        file_glob: args.file_glob.clone(),
+        sym_only: args.sym,
+        fuzzy: args.fuzzy,
+    };
+
+    match searcher::search(&root, &args.query, output_mode, &opts) {
         Ok((output, stats)) => {
             print!("{}", output);
             if stats.total_results == 0 {
@@ -33,6 +52,9 @@ pub fn run(args: &SearchArgs) {
                 }
                 NsError::QueryParse(e) => {
                     eprintln!("error: invalid query: {}", e);
+                }
+                NsError::Glob(e) => {
+                    eprintln!("error: invalid glob pattern: {}", e);
                 }
                 NsError::Json(_) => {
                     eprintln!("error: corrupt index metadata. Run `ns index` to rebuild.");
