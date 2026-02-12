@@ -716,6 +716,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tantivy",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-javascript",

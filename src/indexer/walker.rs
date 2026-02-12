@@ -1,3 +1,4 @@
+use std::io::Read as _;
 use std::path::Path;
 
 use ignore::WalkBuilder;
@@ -10,8 +11,8 @@ pub struct WalkedFile {
     pub rel_path: String,
     /// Full file content as a UTF-8 string.
     pub content: String,
-    /// Detected language identifier, or empty string if unknown.
-    pub lang: String,
+    /// Detected language identifier, or `None` if unknown/unsupported.
+    pub lang: Option<String>,
 }
 
 /// Walks the repository at `root`, returning indexable files.
@@ -66,7 +67,29 @@ pub fn walk_repo(root: &Path, max_file_size: u64) -> Vec<WalkedFile> {
             continue;
         }
 
-        // Read the file
+        // Binary check: read only the first 512 bytes before committing to a full read.
+        // This avoids loading a large binary file entirely into memory.
+        let mut file_handle = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!("warning: cannot open {}: {}", path.display(), err);
+                continue;
+            }
+        };
+        let mut header = [0u8; 512];
+        let header_len = match file_handle.read(&mut header) {
+            Ok(n) => n,
+            Err(err) => {
+                eprintln!("warning: cannot read {}: {}", path.display(), err);
+                continue;
+            }
+        };
+        if header[..header_len].contains(&0) {
+            continue;
+        }
+        drop(file_handle);
+
+        // Full read (now that we know it's likely text)
         let raw = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(err) => {
@@ -74,12 +97,6 @@ pub fn walk_repo(root: &Path, max_file_size: u64) -> Vec<WalkedFile> {
                 continue;
             }
         };
-
-        // Binary check: look for null bytes in first 512 bytes
-        let check_len = raw.len().min(512);
-        if raw[..check_len].contains(&0) {
-            continue;
-        }
 
         // UTF-8 check
         let content = match String::from_utf8(raw) {
@@ -96,9 +113,7 @@ pub fn walk_repo(root: &Path, max_file_size: u64) -> Vec<WalkedFile> {
             Err(_) => path.to_string_lossy().to_string(),
         };
 
-        let lang = detect_language(path)
-            .unwrap_or("")
-            .to_string();
+        let lang = detect_language(path).map(|s| s.to_string());
 
         files.push(WalkedFile {
             rel_path,
@@ -136,10 +151,10 @@ mod tests {
 
         // Language detection works
         let rs_file = files.iter().find(|f| f.rel_path.contains("event_store.rs")).unwrap();
-        assert_eq!(rs_file.lang, "rust");
+        assert_eq!(rs_file.lang.as_deref(), Some("rust"));
 
         let md_file = files.iter().find(|f| f.rel_path.contains("README.md")).unwrap();
-        assert_eq!(md_file.lang, "");
+        assert_eq!(md_file.lang, None);
     }
 
     #[test]

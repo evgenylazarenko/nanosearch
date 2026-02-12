@@ -31,6 +31,9 @@ pub fn build_schema() -> Schema {
     builder.add_text_field("symbols", symbols_options);
 
     // symbols_raw: STRING (untokenized) | STORED
+    // Intentionally STRING, not TEXT — stored as pipe-delimited "Foo|bar|Baz" for
+    // post-retrieval splitting. Never searched directly; symbol search uses the
+    // `symbols` TEXT field above. This avoids indexing overhead for a display-only field.
     builder.add_text_field("symbols_raw", STRING | STORED);
 
     // path: STRING (untokenized) | STORED — used for delete_term in incremental indexing
