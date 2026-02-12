@@ -156,7 +156,7 @@ pub fn read_meta(root: &Path) -> Result<IndexMeta, NsError> {
     Ok(meta)
 }
 
-fn dir_size(path: &Path) -> u64 {
+pub(crate) fn dir_size(path: &Path) -> u64 {
     let mut size = 0;
     if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
@@ -174,7 +174,7 @@ fn dir_size(path: &Path) -> u64 {
     size
 }
 
-fn get_git_commit(root: &Path) -> Option<String> {
+pub(crate) fn get_git_commit(root: &Path) -> Option<String> {
     std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(root)
@@ -189,7 +189,7 @@ fn get_git_commit(root: &Path) -> Option<String> {
         })
 }
 
-fn utc_timestamp_iso8601() -> String {
+pub(crate) fn utc_timestamp_iso8601() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
