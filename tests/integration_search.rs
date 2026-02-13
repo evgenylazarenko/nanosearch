@@ -633,6 +633,7 @@ fn context_window_zero_shows_only_matching_lines() {
         if trimmed.is_empty()
             || trimmed.starts_with('[')
             || trimmed.starts_with("...")
+            || trimmed.starts_with('~')
             || trimmed.contains("result")
         {
             continue;
@@ -1040,6 +1041,91 @@ fn cli_search_subcommand_with_flags() {
     assert!(
         !parsed["results"].as_array().unwrap().is_empty(),
         "should have results"
+    );
+}
+
+// ── Feature 5: Explainable ranking tests ──────────────────────────────────────
+
+#[test]
+fn json_output_has_ranking_factors() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (output, _stats) =
+        ns::searcher::search(&root, "EventStore", OutputMode::Json, &SearchOptions::default())
+            .expect("search should work");
+
+    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+    let first = &parsed["results"][0];
+    let rf = &first["ranking_factors"];
+    assert!(rf.is_object(), "ranking_factors should be present as an object");
+    assert!(rf["bm25_content"].is_number(), "bm25_content should be a number");
+    assert!(rf["bm25_symbols"].is_number(), "bm25_symbols should be a number");
+    assert_eq!(rf["symbol_boost"], "3x", "symbol_boost should be '3x'");
+    assert!(rf["matched_fields"].is_array(), "matched_fields should be an array");
+
+    // EventStore matches both content and symbols in event_store.rs
+    let matched_fields: Vec<&str> = rf["matched_fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(
+        matched_fields.contains(&"symbols"),
+        "EventStore should match symbols field, got: {:?}",
+        matched_fields
+    );
+}
+
+#[test]
+fn symbol_match_has_nonzero_bm25_symbols() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // "EventStore" is an extracted symbol in event_store.rs — should have nonzero bm25_symbols
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "EventStore", &opts(10))
+            .expect("search should work");
+
+    assert!(!results.is_empty());
+    let event_store_result = results
+        .iter()
+        .find(|r| r.path.contains("event_store.rs"))
+        .expect("event_store.rs should be in results");
+
+    assert!(
+        event_store_result.score_symbols > 0.0,
+        "event_store.rs defines EventStore symbol, bm25_symbols should be > 0, got: {}",
+        event_store_result.score_symbols
+    );
+    assert!(
+        event_store_result.matched_fields.contains(&"symbols".to_string()),
+        "matched_fields should contain 'symbols'"
+    );
+}
+
+#[test]
+fn content_only_match_has_zero_bm25_symbols() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // Search for a term that appears in file content but is not an extracted symbol name.
+    // "pub" appears in Rust source content but is not a symbol name.
+    let sym_opts = SearchOptions {
+        max_results: 10,
+        file_type: Some("rust".to_string()),
+        ..Default::default()
+    };
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "pub", &sym_opts)
+            .expect("search should work");
+
+    assert!(!results.is_empty(), "should find results for 'pub'");
+    // At least one result should have zero bm25_symbols (pure content match)
+    let has_content_only = results.iter().any(|r| r.score_symbols == 0.0);
+    assert!(
+        has_content_only,
+        "at least one result for 'pub' should have zero bm25_symbols (content-only match), scores: {:?}",
+        results.iter().map(|r| (r.path.as_str(), r.score_symbols)).collect::<Vec<_>>()
     );
 }
 

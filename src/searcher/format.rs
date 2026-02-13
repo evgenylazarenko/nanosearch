@@ -25,6 +25,15 @@ pub fn format_text(results: &[DisplayResult]) -> String {
             display.rank, display.result.path, display.result.score, lang_str
         ));
 
+        // Short ranking annotation when there are matched fields
+        if !display.result.matched_fields.is_empty() {
+            let fields = display.result.matched_fields.join("+");
+            out.push_str(&format!(
+                "      ~ matched: {}, bm25_content: {:.1}, bm25_symbols: {:.1}\n",
+                fields, display.result.score_content, display.result.score_symbols
+            ));
+        }
+
         // Context lines — insert "..." separator between non-contiguous groups
         let mut prev_line_number: Option<usize> = None;
         for line in &display.context_lines {
@@ -142,6 +151,12 @@ pub fn format_json(
                 "lang": d.result.lang,
                 "matched_symbols": matched,
                 "lines": lines,
+                "ranking_factors": {
+                    "bm25_content": ((d.result.score_content as f64) * 10.0).round() / 10.0,
+                    "bm25_symbols": ((d.result.score_symbols as f64) * 10.0).round() / 10.0,
+                    "symbol_boost": "3x",
+                    "matched_fields": d.result.matched_fields,
+                },
             })
         })
         .collect();
@@ -175,6 +190,9 @@ mod tests {
                 score: 8.5,
                 lang: Some("rust".to_string()),
                 symbols_raw: vec!["main".to_string()],
+                score_content: 6.0,
+                score_symbols: 2.5,
+                matched_fields: vec!["content".to_string(), "symbols".to_string()],
             },
             context_lines: vec![
                 ContextLine {
@@ -193,6 +211,8 @@ mod tests {
         assert!(output.contains("score: 8.5"));
         assert!(output.contains("lang: rust"));
         assert!(output.contains("  10: fn main()"));
+        // Ranking annotation should appear
+        assert!(output.contains("matched: content+symbols"), "should show matched fields annotation");
         // Summary is no longer part of format_text — see format_summary
         assert!(!output.contains("result (searched"), "summary should not be in format_text output");
     }
@@ -237,6 +257,9 @@ mod tests {
                 score: 5.0,
                 lang: Some("rust".to_string()),
                 symbols_raw: vec![],
+                score_content: 5.0,
+                score_symbols: 0.0,
+                matched_fields: vec!["content".to_string()],
             },
             context_lines: vec![
                 ContextLine { line_number: 3, text: "use foo;".to_string() },
@@ -263,6 +286,9 @@ mod tests {
                 score: 5.0,
                 lang: Some("rust".to_string()),
                 symbols_raw: vec![],
+                score_content: 5.0,
+                score_symbols: 0.0,
+                matched_fields: vec!["content".to_string()],
             },
             context_lines: vec![
                 ContextLine { line_number: 1, text: "line1".to_string() },
@@ -283,6 +309,9 @@ mod tests {
                 score: 2.0,
                 lang: None,
                 symbols_raw: vec![],
+                score_content: 2.0,
+                score_symbols: 0.0,
+                matched_fields: vec!["content".to_string()],
             },
             context_lines: vec![],
         }];
@@ -298,12 +327,18 @@ mod tests {
                 score: 8.5,
                 lang: Some("rust".to_string()),
                 symbols_raw: vec![],
+                score_content: 8.5,
+                score_symbols: 0.0,
+                matched_fields: vec!["content".to_string()],
             },
             SearchResult {
                 path: "src/lib.rs".to_string(),
                 score: 5.0,
                 lang: Some("rust".to_string()),
                 symbols_raw: vec![],
+                score_content: 5.0,
+                score_symbols: 0.0,
+                matched_fields: vec!["content".to_string()],
             },
         ];
 
@@ -320,6 +355,9 @@ mod tests {
                 score: 12.4,
                 lang: Some("rust".to_string()),
                 symbols_raw: vec!["EventStore".to_string(), "new".to_string()],
+                score_content: 4.2,
+                score_symbols: 2.8,
+                matched_fields: vec!["content".to_string(), "symbols".to_string()],
             },
             context_lines: vec![
                 ContextLine {
@@ -345,6 +383,17 @@ mod tests {
         assert_eq!(parsed["results"][0]["lines"][0]["num"], 5);
         assert_eq!(parsed["stats"]["total_results"], 1);
         assert_eq!(parsed["stats"]["files_searched"], 42);
+
+        // Feature 5: ranking_factors should be present
+        let rf = &parsed["results"][0]["ranking_factors"];
+        assert!(rf.is_object(), "ranking_factors should be an object");
+        assert_eq!(rf["bm25_content"], 4.2);
+        assert_eq!(rf["bm25_symbols"], 2.8);
+        assert_eq!(rf["symbol_boost"], "3x");
+        let mf = rf["matched_fields"].as_array().unwrap();
+        assert_eq!(mf.len(), 2);
+        assert_eq!(mf[0], "content");
+        assert_eq!(mf[1], "symbols");
     }
 
     #[test]
@@ -356,6 +405,9 @@ mod tests {
                 score: 5.0,
                 lang: Some("rust".to_string()),
                 symbols_raw: vec!["EventStore".to_string(), "unrelated_fn".to_string()],
+                score_content: 3.0,
+                score_symbols: 2.0,
+                matched_fields: vec!["content".to_string(), "symbols".to_string()],
             },
             context_lines: vec![],
         }];

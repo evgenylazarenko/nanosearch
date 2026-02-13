@@ -23,6 +23,12 @@ pub struct SearchResult {
     pub lang: Option<String>,
     /// Raw symbol names extracted from the document (pipe-separated in index).
     pub symbols_raw: Vec<String>,
+    /// BM25 score contribution from the `content` field only.
+    pub score_content: f32,
+    /// BM25 score contribution from the `symbols` field only.
+    pub score_symbols: f32,
+    /// Which fields contributed to the match (e.g. ["content"], ["symbols"], or both).
+    pub matched_fields: Vec<String>,
 }
 
 /// Summary statistics for a search operation.
@@ -137,6 +143,23 @@ pub fn execute_search(
     let top_docs = searcher.search(&query, &TopDocs::with_limit(max_results))?;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
+    // Build per-field queries for re-scoring (explainable ranking).
+    // These are only evaluated against the top-N docs, not the full index.
+    let content_query: Option<Box<dyn Query>> = if opts.sym_only {
+        None // No content field in sym-only mode
+    } else if opts.fuzzy {
+        Some(build_fuzzy_single_field_query(query_str, content))
+    } else {
+        let parser = QueryParser::for_index(&index, vec![content]);
+        parser.parse_query(query_str).ok()
+    };
+    let symbols_query: Option<Box<dyn Query>> = if opts.fuzzy {
+        Some(build_fuzzy_single_field_query(query_str, symbols_f))
+    } else {
+        let parser = QueryParser::for_index(&index, vec![symbols_f]);
+        parser.parse_query(query_str).ok()
+    };
+
     let mut results = Vec::with_capacity(top_docs.len());
     for (score, doc_address) in &top_docs {
         let doc: TantivyDocument = searcher.doc(*doc_address)?;
@@ -165,11 +188,34 @@ pub fn execute_search(
             symbols_raw_val.split('|').map(|s| s.to_string()).collect()
         };
 
+        // Re-score against individual field queries for explainability.
+        let score_content = content_query
+            .as_ref()
+            .and_then(|q| q.explain(&searcher, *doc_address).ok())
+            .map(|e| e.value() as f32)
+            .unwrap_or(0.0);
+        let score_symbols = symbols_query
+            .as_ref()
+            .and_then(|q| q.explain(&searcher, *doc_address).ok())
+            .map(|e| e.value() as f32)
+            .unwrap_or(0.0);
+
+        let mut matched_fields = Vec::new();
+        if score_content > 0.0 {
+            matched_fields.push("content".to_string());
+        }
+        if score_symbols > 0.0 {
+            matched_fields.push("symbols".to_string());
+        }
+
         results.push(SearchResult {
             path: path_val,
             score: *score,
             lang: lang_val,
             symbols_raw: symbols,
+            score_content,
+            score_symbols,
+            matched_fields,
         });
     }
 
@@ -188,6 +234,36 @@ pub fn execute_search(
     Ok((results, stats))
 }
 
+/// Tokenizes a query string: splits on whitespace and lowercases each token.
+fn tokenize_query(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .collect()
+}
+
+/// Builds a fuzzy query targeting a single field (no boost).
+/// Used for per-field re-scoring in explainable ranking.
+fn build_fuzzy_single_field_query(
+    query_str: &str,
+    field: tantivy::schema::Field,
+) -> Box<dyn Query> {
+    let tokens = tokenize_query(query_str);
+
+    let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+    for lower in &tokens {
+        let ft = FuzzyTermQuery::new(Term::from_field_text(field, lower), 1, true);
+        clauses.push((Occur::Should, Box::new(ft)));
+    }
+
+    if clauses.is_empty() {
+        Box::new(BooleanQuery::new(vec![]))
+    } else {
+        Box::new(BooleanQuery::new(clauses))
+    }
+}
+
 /// Builds a fuzzy query by tokenizing the input, creating a `FuzzyTermQuery`
 /// per token (Levenshtein distance 1, transposition cost 1), and combining
 /// them with `Should` occurrence so any term match contributes.
@@ -200,20 +276,15 @@ fn build_fuzzy_query(
     symbols_field: tantivy::schema::Field,
     sym_only: bool,
 ) -> Box<dyn Query> {
-    let terms: Vec<&str> = query_str
-        .split_whitespace()
-        .filter(|s| !s.is_empty())
-        .collect();
+    let tokens = tokenize_query(query_str);
 
     let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
 
-    for term_str in &terms {
-        let lower = term_str.to_lowercase();
-
+    for lower in &tokens {
         if sym_only {
             // Only symbols field
             let ft = FuzzyTermQuery::new(
-                Term::from_field_text(symbols_field, &lower),
+                Term::from_field_text(symbols_field, lower),
                 1,
                 true,
             );
@@ -221,7 +292,7 @@ fn build_fuzzy_query(
         } else {
             // Content field (no boost)
             let ft_content = FuzzyTermQuery::new(
-                Term::from_field_text(content_field, &lower),
+                Term::from_field_text(content_field, lower),
                 1,
                 true,
             );
@@ -229,7 +300,7 @@ fn build_fuzzy_query(
 
             // Symbols field with 3x boost
             let ft_symbols = FuzzyTermQuery::new(
-                Term::from_field_text(symbols_field, &lower),
+                Term::from_field_text(symbols_field, lower),
                 1,
                 true,
             );
