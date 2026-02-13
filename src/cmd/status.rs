@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::error::NsError;
 use crate::indexer::writer::{read_meta, SCHEMA_VERSION};
+use crate::stats;
 
 pub fn run() {
     let root = match PathBuf::from(".").canonicalize() {
@@ -42,6 +43,20 @@ pub fn run() {
     println!("  indexed at     : {}", meta.indexed_at);
     if let Some(commit) = &meta.git_commit {
         println!("  git commit     : {}", &commit[..commit.len().min(12)]);
+    }
+
+    let st = stats::read_stats(&root);
+    if st.total_searches > 0 {
+        println!();
+        println!("search usage");
+        println!("  total searches : {}", st.total_searches);
+        if let Some(ref ts) = st.last_search_at {
+            println!("  last search    : {}", ts);
+        }
+        println!(
+            "  est. tokens out: {}",
+            stats::format_token_count(st.total_estimated_tokens)
+        );
     }
 }
 

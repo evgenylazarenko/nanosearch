@@ -6,6 +6,7 @@ use crate::searcher;
 use crate::searcher::format::format_summary;
 use crate::searcher::query::SearchOptions;
 use crate::searcher::OutputMode;
+use crate::stats;
 
 pub fn run(args: &SearchArgs) {
     let root = match PathBuf::from(".").canonicalize() {
@@ -47,6 +48,7 @@ pub fn run(args: &SearchArgs) {
             } else {
                 print!("{}", output);
                 eprintln!("{}", format_summary(&stats));
+                stats::record_search(&root, output.len());
             }
         }
         Err(err) => {

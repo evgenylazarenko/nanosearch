@@ -3,6 +3,7 @@ mod error;
 mod indexer;
 mod schema;
 mod searcher;
+mod stats;
 
 use clap::Parser;
 use cmd::{Cli, Command, SearchArgs};
