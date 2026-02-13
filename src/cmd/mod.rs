@@ -59,6 +59,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Search the index (use when query matches a subcommand name)
+    Search(SearchSubArgs),
     /// Build or update the search index
     Index(IndexArgs),
     /// Show index status
@@ -68,6 +70,40 @@ pub enum Command {
         #[command(subcommand)]
         action: HooksAction,
     },
+}
+
+#[derive(Parser)]
+pub struct SearchSubArgs {
+    /// Search query
+    pub query: String,
+
+    /// Show matching file paths only
+    #[arg(short = 'l', long = "files")]
+    pub files_only: bool,
+
+    /// Case-insensitive search (accepted for rg compatibility; always on)
+    #[arg(short = 'i', long = "ignore-case")]
+    pub ignore_case: bool,
+
+    /// Maximum number of results
+    #[arg(short = 'm', long = "max-count", default_value_t = 10)]
+    pub max_count: usize,
+
+    /// Context lines around matches
+    #[arg(short = 'C', long = "context", default_value_t = 1)]
+    pub context: usize,
+
+    /// Output results as JSON
+    #[arg(long = "json")]
+    pub json: bool,
+
+    /// Symbol-only search
+    #[arg(long = "sym")]
+    pub sym: bool,
+
+    /// Fuzzy search
+    #[arg(long = "fuzzy")]
+    pub fuzzy: bool,
 }
 
 #[derive(Parser)]
@@ -118,6 +154,20 @@ impl SearchArgs {
             json: cli.json,
             sym: cli.sym,
             fuzzy: cli.fuzzy,
+        }
+    }
+
+    pub fn from_search_sub(sub: &SearchSubArgs, cli: &Cli) -> Self {
+        Self {
+            query: sub.query.clone(),
+            file_type: cli.file_type.clone(),
+            file_glob: cli.file_glob.clone(),
+            files_only: sub.files_only,
+            max_count: sub.max_count,
+            context: sub.context,
+            json: sub.json,
+            sym: sub.sym,
+            fuzzy: sub.fuzzy,
         }
     }
 }

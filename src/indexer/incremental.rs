@@ -130,6 +130,32 @@ pub fn run_incremental(
     Ok(stats)
 }
 
+/// Reads the set of all file paths currently in the tantivy index.
+fn get_indexed_paths(index: &tantivy::Index) -> Result<HashSet<String>, NsError> {
+    let reader = index
+        .reader_builder()
+        .reload_policy(ReloadPolicy::Manual)
+        .try_into()?;
+    let searcher = reader.searcher();
+    let schema = index.schema();
+    let path_f = path_field(&schema);
+
+    let mut paths = HashSet::new();
+    for segment_reader in searcher.segment_readers() {
+        let store_reader = segment_reader.get_store_reader(1)?;
+        for doc_id in 0..segment_reader.num_docs() {
+            if let Ok(doc) = store_reader.get::<TantivyDocument>(doc_id) {
+                if let Some(val) = doc.get_first(path_f) {
+                    if let Some(path_str) = val.as_str() {
+                        paths.insert(path_str.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(paths)
+}
+
 /// Detects changes since the last index using git diff (preferred) or mtime fallback.
 fn detect_changes(
     root: &Path,
@@ -140,11 +166,16 @@ fn detect_changes(
     // Try git-based detection first
     if let Some(ref old_commit) = meta.git_commit {
         if let Some(current_commit) = get_git_commit(root) {
+            let indexed_paths = get_indexed_paths(index)?;
             if *old_commit == current_commit {
                 // Same commit — check for uncommitted changes via working tree diff
-                return detect_changes_git_uncommitted(root, max_file_size);
+                return detect_changes_git_uncommitted(
+                    root, max_file_size, &indexed_paths, &meta.indexed_at,
+                );
             }
-            return detect_changes_git(root, old_commit, &current_commit, max_file_size);
+            return detect_changes_git(
+                root, old_commit, &current_commit, max_file_size, &indexed_paths, &meta.indexed_at,
+            );
         }
     }
 
@@ -159,12 +190,15 @@ fn detect_changes_git(
     old_commit: &str,
     current_commit: &str,
     max_file_size: u64,
+    indexed_paths: &HashSet<String>,
+    indexed_at: &str,
 ) -> Result<ChangeSet, NsError> {
     // Get committed changes between old and current commit
     let mut changes = parse_git_diff(root, old_commit, current_commit)?;
 
     // Also check for uncommitted working tree changes (staged + unstaged)
-    let working_changes = detect_changes_git_uncommitted(root, max_file_size)?;
+    let working_changes =
+        detect_changes_git_uncommitted(root, max_file_size, indexed_paths, indexed_at)?;
 
     // Merge working tree changes into committed changes
     merge_changesets(&mut changes, working_changes);
@@ -176,9 +210,16 @@ fn detect_changes_git(
 }
 
 /// Detects uncommitted changes (both staged and unstaged) against HEAD.
+///
+/// `indexed_paths` is the set of file paths already in the tantivy index.
+/// Untracked files already in the index are skipped (or classified as modified
+/// if their mtime is newer than `indexed_at`), preventing duplicate document
+/// insertion on repeated incremental runs.
 fn detect_changes_git_uncommitted(
     root: &Path,
     max_file_size: u64,
+    indexed_paths: &HashSet<String>,
+    indexed_at: &str,
 ) -> Result<ChangeSet, NsError> {
     // git diff --name-status HEAD (working tree vs HEAD, includes staged)
     let output = std::process::Command::new("git")
@@ -206,10 +247,28 @@ fn detect_changes_git_uncommitted(
         .map_err(|e| NsError::Io(e))?;
 
     if untracked_output.status.success() {
+        let indexed_time = parse_iso8601_to_system_time(indexed_at);
         let untracked = String::from_utf8_lossy(&untracked_output.stdout);
         for line in untracked.lines() {
             let path = line.trim();
-            if !path.is_empty() && !changes.added.contains(&path.to_string()) {
+            if path.is_empty() || changes.added.contains(&path.to_string()) {
+                continue;
+            }
+            if indexed_paths.contains(path) {
+                // Already in the index — check if it was modified since last index
+                if let Some(ref idx_time) = indexed_time {
+                    let abs_path = root.join(path);
+                    if let Ok(file_meta) = abs_path.metadata() {
+                        if let Ok(mtime) = file_meta.modified() {
+                            if mtime > *idx_time {
+                                changes.modified.push(path.to_string());
+                            }
+                        }
+                    }
+                }
+                // If mtime is not newer, skip — already indexed and up to date
+            } else {
+                // Not in index — genuinely new file
                 changes.added.push(path.to_string());
             }
         }
@@ -380,28 +439,7 @@ fn detect_changes_mtime(
         .map(|f| f.rel_path.clone())
         .collect();
 
-    // Get previously indexed paths from the already-opened index
-    let reader = index
-        .reader_builder()
-        .reload_policy(ReloadPolicy::Manual)
-        .try_into()?;
-    let searcher = reader.searcher();
-    let schema = index.schema();
-    let path_f = path_field(&schema);
-
-    let mut indexed_paths: HashSet<String> = HashSet::new();
-    for segment_reader in searcher.segment_readers() {
-        let store_reader = segment_reader.get_store_reader(1)?;
-        for doc_id in 0..segment_reader.num_docs() {
-            if let Ok(doc) = store_reader.get::<TantivyDocument>(doc_id) {
-                if let Some(val) = doc.get_first(path_f) {
-                    if let Some(path_str) = val.as_str() {
-                        indexed_paths.insert(path_str.to_string());
-                    }
-                }
-            }
-        }
-    }
+    let indexed_paths = get_indexed_paths(index)?;
 
     let mut added = Vec::new();
     let mut modified = Vec::new();

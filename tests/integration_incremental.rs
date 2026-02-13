@@ -166,6 +166,46 @@ fn incremental_updates_meta_json() {
     );
 }
 
+// ── Idempotency regression tests (Bug 2) ─────────────────────────────────────
+
+#[test]
+fn incremental_repeated_runs_are_idempotent_mtime() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let meta_after_full = ns::indexer::writer::read_meta(&root).expect("read meta");
+    let count_after_full = meta_after_full.file_count;
+
+    // Run incremental 3 times — file count should stay constant
+    for i in 1..=3 {
+        thread::sleep(Duration::from_millis(50));
+        let stats = ns::indexer::run_incremental_index(&root, 1_048_576)
+            .expect("incremental should succeed");
+
+        assert_eq!(
+            stats.added, 0,
+            "run {}: should have 0 added, got {}",
+            i, stats.added
+        );
+        assert_eq!(
+            stats.modified, 0,
+            "run {}: should have 0 modified, got {}",
+            i, stats.modified
+        );
+        assert_eq!(
+            stats.deleted, 0,
+            "run {}: should have 0 deleted, got {}",
+            i, stats.deleted
+        );
+
+        let meta = ns::indexer::writer::read_meta(&root).expect("read meta");
+        assert_eq!(
+            meta.file_count, count_after_full,
+            "run {}: file count should stay at {}, got {}",
+            i, count_after_full, meta.file_count
+        );
+    }
+}
+
 // ── Git-based tests ─────────────────────────────────────────────────────────
 
 /// Creates an isolated fixture with a git repo initialized and initial commit made.
@@ -371,5 +411,71 @@ fn incremental_git_uncommitted_changes() {
     assert!(
         !results.is_empty(),
         "should find 'uncommitted_function' after incremental"
+    );
+}
+
+/// Regression test for Bug 2: repeated incremental runs in a git repo with
+/// untracked files should NOT re-add those files each time.
+#[test]
+fn incremental_git_repeated_runs_no_duplicates() {
+    let (_tmp, root) = git_indexed_fixture();
+
+    // Create an untracked file (not committed)
+    let untracked = root.join("src").join("untracked_file.rs");
+    fs::write(&untracked, "pub fn untracked_fn() {}\n").expect("write untracked");
+
+    // First incremental — should detect the untracked file as added
+    let stats1 = ns::indexer::run_incremental_index(&root, 1_048_576)
+        .expect("incremental 1 should succeed");
+    assert!(
+        stats1.added >= 1,
+        "first run should add the untracked file, got {} added",
+        stats1.added
+    );
+
+    let meta1 = ns::indexer::writer::read_meta(&root).expect("read meta after run 1");
+
+    // Second incremental — no new files should be added.
+    // (modified may be non-zero due to mtime granularity, but that's a safe
+    // delete+re-add — the key invariant is that file count doesn't grow.)
+    let stats2 = ns::indexer::run_incremental_index(&root, 1_048_576)
+        .expect("incremental 2 should succeed");
+    assert_eq!(
+        stats2.added, 0,
+        "second run should add 0 files, got {} added",
+        stats2.added
+    );
+
+    let meta2 = ns::indexer::writer::read_meta(&root).expect("read meta after run 2");
+    assert_eq!(
+        meta1.file_count, meta2.file_count,
+        "file count should be stable: {} vs {}",
+        meta1.file_count, meta2.file_count
+    );
+
+    // Third incremental — still no growth
+    let stats3 = ns::indexer::run_incremental_index(&root, 1_048_576)
+        .expect("incremental 3 should succeed");
+    assert_eq!(stats3.added, 0, "third run should add 0 files");
+
+    let meta3 = ns::indexer::writer::read_meta(&root).expect("read meta after run 3");
+    assert_eq!(
+        meta1.file_count, meta3.file_count,
+        "file count should remain stable across 3 runs"
+    );
+
+    // Verify no duplicate paths in search results
+    let (results, _) =
+        ns::searcher::query::execute_search(&root, "untracked_fn", &opts(100))
+            .expect("search should work");
+
+    let path_count = results
+        .iter()
+        .filter(|r| r.path.contains("untracked_file.rs"))
+        .count();
+    assert_eq!(
+        path_count, 1,
+        "untracked_file.rs should appear exactly once in results, got {}",
+        path_count
     );
 }

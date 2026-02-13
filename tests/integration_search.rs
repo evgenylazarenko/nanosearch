@@ -881,11 +881,135 @@ fn cli_no_results_files_only_exits_1_empty_stdout() {
     );
 }
 
+#[test]
+fn cli_broken_pipe_does_not_panic() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // Pipe ns output to a process that immediately exits (closes stdin).
+    // Before the fix, this caused a panic: "failed printing to stdout: Broken pipe".
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(ns_binary())
+        .arg("EventStore")
+        .current_dir(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("should spawn ns");
+
+    // Immediately drop stdout to simulate a broken pipe (consumer closed)
+    drop(child.stdout.take());
+
+    let result = child.wait_with_output().expect("should wait for ns");
+
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "ns should not panic on broken pipe, stderr: {}",
+        stderr
+    );
+}
+
 // Note: The "index locked" error path (Issue 5) is not tested because reliably
 // triggering a tantivy lock conflict in a test is fragile and race-prone.
 // The lock detection itself is robust — it uses `TantivyError::LockFailure`
 // variant matching (not string matching), so it will not regress silently
 // across tantivy version upgrades.
+
+// ── `ns search` subcommand tests ──────────────────────────────────────────────
+
+#[test]
+fn cli_search_subcommand_works() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .args(["search", "EventStore"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(
+        output.status.success(),
+        "ns search should exit 0 when results found"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("event_store.rs"),
+        "ns search should return results, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn cli_search_subcommand_disambiguates_index_query() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // "index" as a query would normally be parsed as the index subcommand.
+    // `ns search "index"` should unambiguously search for the word "index".
+    let output = std::process::Command::new(ns_binary())
+        .args(["search", "index", "-l"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    // Should not get a subcommand parse error
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "should not get subcommand parse error, got: {}",
+        stderr
+    );
+    // Exit code 0 (found) or 1 (not found) are both acceptable — no crash/parse error
+    assert!(
+        output.status.code() == Some(0) || output.status.code() == Some(1),
+        "should exit 0 or 1, got: {:?}",
+        output.status.code()
+    );
+}
+
+#[test]
+fn cli_double_dash_disambiguates_query() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // `ns -- "index"` should also work as a search for "index"
+    let output = std::process::Command::new(ns_binary())
+        .args(["--", "index"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "-- should disambiguate, got: {}",
+        stderr
+    );
+    assert!(
+        output.status.code() == Some(0) || output.status.code() == Some(1),
+        "should exit 0 or 1, got: {:?}",
+        output.status.code()
+    );
+}
+
+#[test]
+fn cli_search_subcommand_with_flags() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .args(["search", "EventStore", "--json", "-m", "5"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(output.status.success(), "ns search with flags should work");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("should be valid JSON");
+    assert!(
+        !parsed["results"].as_array().unwrap().is_empty(),
+        "should have results"
+    );
+}
 
 // ── Performance smoke test ────────────────────────────────────────────────────
 
