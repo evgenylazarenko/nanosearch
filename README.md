@@ -3,7 +3,7 @@
 Ranked code search for LLM agents. Single binary, no server, no query language.
 
 ```
-$ ns "EventStore"
+$ ns -- "EventStore"
 
  [1] src/services/event_store.rs        (score: 12.4, lang: rust)
      42: pub struct EventStore {
@@ -43,7 +43,7 @@ One binary. No runtime dependencies.
 ns index
 
 # Search
-ns "UserRepository"
+ns -- "UserRepository"
 
 # Keep index fresh automatically
 ns hooks install
@@ -51,7 +51,7 @@ ns hooks install
 
 ## How it works
 
-ns builds a local search index in `.ns/` at your repo root. Files are indexed with [tantivy](https://github.com/quickwit-oss/tantivy) (BM25 scoring) and parsed with [tree-sitter](https://tree-sitter.github.io/) to extract symbol names. When you search, results are ranked by relevance with a 3x boost for symbol matches — so `ns "EventStore"` ranks the file where `EventStore` is defined above files that merely import it.
+ns builds a local search index in `.ns/` at your repo root. Files are indexed with [tantivy](https://github.com/quickwit-oss/tantivy) (BM25 scoring) and parsed with [tree-sitter](https://tree-sitter.github.io/) to extract symbol names. When you search, results are ranked by relevance with a 3x boost for symbol matches — so `ns -- "EventStore"` ranks the file where `EventStore` is defined above files that merely import it.
 
 The index is file-level, not line-level. BM25 tells the agent "look in this file." Context lines are extracted post-search by re-reading the top result files, which is fast since only a handful of files are scanned.
 
@@ -74,29 +74,24 @@ Files in other languages are still indexed by content — they just don't get sy
 ### Search (default)
 
 ```
-ns <QUERY> [OPTIONS]
+ns [OPTIONS] -- "<QUERY>"
 ```
 
-Search is the default command. No subcommand needed.
-
-If your query matches a subcommand name (e.g., `"index"`, `"status"`), use `ns search` or `--` to disambiguate:
+Search is the default command. No subcommand needed. Use `--` before the query to separate flags from the search term — this avoids ambiguity when a query matches a subcommand name (e.g., `"index"`, `"status"`), and mirrors how `rg` separates options from patterns.
 
 ```bash
-ns search "index" -l             # explicit search subcommand
-ns -- "index" -l                 # double-dash also works
+ns -- "EventStore"                  # basic search
+ns -t rust -- "handler"             # filter by language
+ns -g "src/api/*" -- "config"       # filter by path glob
+ns --sym -- "Event"                 # search symbol names only
+ns --fuzzy -- "EvntStore"           # typo-tolerant search (Levenshtein distance 1)
+ns -l -- "middleware"               # file paths only
+ns --json -- "UserRepo"             # JSON output (for programmatic use)
+ns -m 20 -- "store"                 # return up to 20 results
+ns -C 3 -- "handler"               # 3 lines of context around matches
 ```
 
-```bash
-ns "EventStore"                  # basic search
-ns "handler" -t rust             # filter by language
-ns "config" -g "src/api/*"       # filter by path glob
-ns "Event" --sym                 # search symbol names only
-ns "EvntStore" --fuzzy           # typo-tolerant search (Levenshtein distance 1)
-ns "middleware" -l               # file paths only
-ns "UserRepo" --json             # JSON output (for programmatic use)
-ns "store" -m 20                 # return up to 20 results
-ns "handler" -C 3                # 3 lines of context around matches
-```
+For simple queries that don't collide with subcommand names, `ns "query"` still works. There is also an explicit `ns search "query"` subcommand as an alternative.
 
 **Flags:**
 
@@ -192,15 +187,15 @@ ns mirrors ripgrep's flags where semantics overlap. If you know rg, you know ns:
 
 | rg | ns | Notes |
 |----|----|-------|
-| `rg "pattern"` | `ns "pattern"` | Positional query |
-| `rg -t rust "pattern"` | `ns -t rust "pattern"` | Language filter |
-| `rg -g "src/**" "pattern"` | `ns -g "src/**" "pattern"` | Glob filter |
-| `rg -l "pattern"` | `ns -l "pattern"` | Files only |
-| `rg -m 5 "pattern"` | `ns -m 5 "pattern"` | Max results |
-| `rg -C 3 "pattern"` | `ns -C 3 "pattern"` | Context lines |
-| `rg --json "pattern"` | `ns --json "pattern"` | JSON output |
-| — | `ns --sym "pattern"` | Symbol-only search (ns-unique) |
-| — | `ns --fuzzy "pattern"` | Typo tolerance (ns-unique) |
+| `rg -- "pattern"` | `ns -- "pattern"` | Positional query |
+| `rg -t rust -- "pattern"` | `ns -t rust -- "pattern"` | Language filter |
+| `rg -g "src/**" -- "pattern"` | `ns -g "src/**" -- "pattern"` | Glob filter |
+| `rg -l -- "pattern"` | `ns -l -- "pattern"` | Files only |
+| `rg -m 5 -- "pattern"` | `ns -m 5 -- "pattern"` | Max results |
+| `rg -C 3 -- "pattern"` | `ns -C 3 -- "pattern"` | Context lines |
+| `rg --json -- "pattern"` | `ns --json -- "pattern"` | JSON output |
+| — | `ns --sym -- "pattern"` | Symbol-only search (ns-unique) |
+| — | `ns --fuzzy -- "pattern"` | Typo tolerance (ns-unique) |
 
 ns is not a regex engine. If you need regex or line-level pattern matching, use rg. ns is for ranked, relevance-ordered search.
 
@@ -233,14 +228,14 @@ Add something like this to your agent's system prompt, `CLAUDE.md`, or equivalen
 Use `ns` for searching the codebase. It returns results ranked by relevance
 with symbol definitions (functions, classes, types) boosted above plain text matches.
 
-Commands:
-- `ns "query"` — search by relevance. Best default choice.
-- `ns "query" --sym` — find where a symbol is defined (function, class, type).
-- `ns "query" -t rust` — limit search to a specific language.
-- `ns "query" -g "src/api/*"` — limit search to a path pattern.
-- `ns "query" --json` — structured output with scores and matched symbols.
-- `ns "query" --fuzzy` — if exact search returns nothing, retry with typo tolerance.
-- `ns "query" -l` — get just file paths (useful for batch operations).
+Always use `--` before the query to separate flags from the search term:
+- `ns -- "query"` — search by relevance. Best default choice.
+- `ns --sym -- "query"` — find where a symbol is defined (function, class, type).
+- `ns -t rust -- "query"` — limit search to a specific language.
+- `ns -g "src/api/*" -- "query"` — limit search to a path pattern.
+- `ns --json -- "query"` — structured output with scores and matched symbols.
+- `ns --fuzzy -- "query"` — if exact search returns nothing, retry with typo tolerance.
+- `ns -l -- "query"` — get just file paths (useful for batch operations).
 - `ns index --incremental` — re-index if results seem stale.
 
 ns flags mirror ripgrep. If you know rg flags, they work the same way in ns.
@@ -250,10 +245,10 @@ ns flags mirror ripgrep. If you know rg flags, they work the same way in ns.
 
 For targeted lookups where you know the exact string, rg is fine. ns is better when:
 
-- **You're exploring.** `ns "authentication"` returns the 10 most relevant files ranked by BM25 score. `rg "authentication"` returns every file containing the string, unranked — could be hundreds.
-- **You're looking for definitions.** `ns "UserRepository" --sym` finds where `UserRepository` is defined, not every file that imports it.
-- **You're dealing with naming variations.** `ns "EventStore" --fuzzy` catches `EvnetStore` typos and near-matches.
-- **You want structured output.** `ns "handler" --json` returns scores, matched symbols, and context lines in a format agents can parse without regex.
+- **You're exploring.** `ns -- "authentication"` returns the 10 most relevant files ranked by BM25 score. `rg "authentication"` returns every file containing the string, unranked — could be hundreds.
+- **You're looking for definitions.** `ns --sym -- "UserRepository"` finds where `UserRepository` is defined, not every file that imports it.
+- **You're dealing with naming variations.** `ns --fuzzy -- "EventStore"` catches `EvnetStore` typos and near-matches.
+- **You want structured output.** `ns --json -- "handler"` returns scores, matched symbols, and context lines in a format agents can parse without regex.
 
 Use both. rg for precise pattern matching, ns for "find me the relevant files."
 
@@ -267,9 +262,9 @@ Use both. rg for precise pattern matching, ns for "find me the relevant files."
 This project has `ns` (Nano Search) installed for ranked code search.
 Prefer `ns` over `grep`/`rg` when looking for relevant files or symbol definitions.
 
-- Find relevant files: `ns "query"`
-- Find definitions: `ns "ClassName" --sym`
-- Structured results: `ns "query" --json`
+- Find relevant files: `ns -- "query"`
+- Find definitions: `ns --sym -- "ClassName"`
+- Structured results: `ns --json -- "query"`
 - Rebuild index after large changes: `ns index --incremental`
 ```
 
