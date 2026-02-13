@@ -11,6 +11,7 @@ pub fn extract_symbols(lang: &str, source: &[u8]) -> Vec<String> {
         "javascript" => extract_javascript(source),
         "python" => extract_python(source),
         "go" => extract_go(source),
+        "elixir" => extract_elixir(source),
         _ => return Vec::new(),
     };
 
@@ -199,6 +200,141 @@ fn walk_go(node: Node, source: &[u8], symbols: &mut Vec<String>) {
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             walk_go(child, source, symbols);
+        }
+    }
+}
+
+// ── Elixir ────────────────────────────────────────────────────────────────────
+
+fn extract_elixir(source: &[u8]) -> Vec<String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_elixir::LANGUAGE.into())
+        .expect("failed to load Elixir grammar");
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    let mut symbols = Vec::new();
+    walk_elixir(tree.root_node(), source, &mut symbols);
+    symbols
+}
+
+fn walk_elixir(node: Node, source: &[u8], symbols: &mut Vec<String>) {
+    if node.kind() == "call" {
+        if let Some(id_node) = node.child_by_field_name("target") {
+            if id_node.kind() == "identifier" {
+                if let Ok(keyword) = id_node.utf8_text(source) {
+                    match keyword {
+                        "defmodule" | "defprotocol" => {
+                            elixir_extract_module_name(&node, source, symbols);
+                        }
+                        "defimpl" => {
+                            elixir_extract_impl_name(&node, source, symbols);
+                        }
+                        "def" | "defp" | "defmacro" | "defmacrop" | "defguard" | "defguardp"
+                        | "defdelegate" => {
+                            elixir_extract_fn_name(&node, source, symbols);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            walk_elixir(child, source, symbols);
+        }
+    }
+}
+
+/// Extracts the first `alias` node from the arguments of a call node.
+///
+/// Used by `defmodule`, `defprotocol`, and `defimpl` — all follow the same
+/// AST pattern: the first alias child of the `arguments` node is the name.
+fn elixir_extract_first_alias(call_node: &Node, source: &[u8], symbols: &mut Vec<String>) {
+    for i in 0..call_node.child_count() {
+        if let Some(child) = call_node.child(i) {
+            if child.kind() == "arguments" {
+                for j in 0..child.named_child_count() {
+                    if let Some(arg) = child.named_child(j) {
+                        if arg.kind() == "alias" {
+                            if let Ok(name) = arg.utf8_text(source) {
+                                symbols.push(name.to_string());
+                            }
+                            return;
+                        }
+                    }
+                }
+                return;
+            }
+        }
+    }
+}
+
+/// Extracts the module/protocol name from `defmodule MyApp.Accounts do ... end`.
+/// The first argument is an `alias` node containing the full module name.
+fn elixir_extract_module_name(call_node: &Node, source: &[u8], symbols: &mut Vec<String>) {
+    elixir_extract_first_alias(call_node, source, symbols);
+}
+
+/// Extracts the protocol name from `defimpl Printable, for: Atom do ... end`.
+/// The first argument is an `alias` node (the protocol being implemented).
+fn elixir_extract_impl_name(call_node: &Node, source: &[u8], symbols: &mut Vec<String>) {
+    elixir_extract_first_alias(call_node, source, symbols);
+}
+
+/// Extracts function/macro/guard name from def/defp/defmacro/defguard calls.
+///
+/// Handles three AST patterns:
+/// - `def create_user(attrs)` → arguments > call > target(identifier)
+/// - `def run` (no args) → arguments > identifier
+/// - `def foo(x) when is_integer(x)` → arguments > binary_operator > left(call) > target(identifier)
+///   (applies to any def/defp/defmacro/defguard with a `when` guard clause)
+fn elixir_extract_fn_name(call_node: &Node, source: &[u8], symbols: &mut Vec<String>) {
+    for i in 0..call_node.child_count() {
+        if let Some(child) = call_node.child(i) {
+            if child.kind() == "arguments" {
+                if let Some(first_arg) = child.named_child(0) {
+                    match first_arg.kind() {
+                        "call" => {
+                            // def func_name(args) — nested call, target is the function name
+                            if let Some(fn_id) = first_arg.child_by_field_name("target") {
+                                if fn_id.kind() == "identifier" {
+                                    if let Ok(name) = fn_id.utf8_text(source) {
+                                        symbols.push(name.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        "identifier" => {
+                            // def func_name (no args, no parens)
+                            if let Ok(name) = first_arg.utf8_text(source) {
+                                symbols.push(name.to_string());
+                            }
+                        }
+                        "binary_operator" => {
+                            // defguard is_admin(user) when ... — left side is the call
+                            if let Some(left) = first_arg.child_by_field_name("left") {
+                                if left.kind() == "call" {
+                                    if let Some(fn_id) = left.child_by_field_name("target") {
+                                        if fn_id.kind() == "identifier" {
+                                            if let Ok(name) = fn_id.utf8_text(source) {
+                                                symbols.push(name.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
         }
     }
 }
@@ -539,6 +675,215 @@ const MaxRequestSize = 1048576
         assert!(symbols.contains(&"HealthCheck".to_string()));
         assert!(symbols.contains(&"DefaultPort".to_string()));
         assert!(symbols.contains(&"MaxRequestSize".to_string()));
+    }
+
+    #[test]
+    fn elixir_extracts_all_symbol_kinds() {
+        let source = br#"
+defmodule MyApp.Accounts do
+  defstruct [:name, :email]
+
+  def create_user(attrs) do
+    attrs
+  end
+
+  defp validate(changeset) do
+    changeset
+  end
+
+  defmacro log_call(func_name) do
+    quote do
+      IO.puts(unquote(func_name))
+    end
+  end
+
+  defmacrop internal_helper(x) do
+    x
+  end
+
+  defguard is_admin(user) when user.role == :admin
+
+  defguardp is_positive(x) when x > 0
+
+  def run do
+    :ok
+  end
+end
+
+defprotocol Printable do
+  def to_string(data)
+end
+
+defimpl Printable, for: Atom do
+  def to_string(atom), do: Atom.to_string(atom)
+end
+
+defmodule MyApp.Accounts.Permissions do
+  defdelegate fetch(key), to: Map
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        assert!(symbols.contains(&"MyApp.Accounts".to_string()), "should find defmodule");
+        assert!(symbols.contains(&"create_user".to_string()), "should find def");
+        assert!(symbols.contains(&"validate".to_string()), "should find defp");
+        assert!(symbols.contains(&"log_call".to_string()), "should find defmacro");
+        assert!(symbols.contains(&"internal_helper".to_string()), "should find defmacrop");
+        assert!(symbols.contains(&"is_admin".to_string()), "should find defguard");
+        assert!(symbols.contains(&"is_positive".to_string()), "should find defguardp");
+        assert!(symbols.contains(&"run".to_string()), "should find no-arg def");
+        assert!(symbols.contains(&"Printable".to_string()), "should find defprotocol");
+        assert!(symbols.contains(&"MyApp.Accounts.Permissions".to_string()), "should find nested module");
+        assert!(symbols.contains(&"fetch".to_string()), "should find defdelegate");
+        // defimpl extracts the protocol name being implemented
+        assert!(symbols.iter().filter(|s| *s == "Printable").count() >= 1, "should find defimpl protocol name");
+    }
+
+    #[test]
+    fn elixir_fixture_event_manager() {
+        let source = include_bytes!("../../tests/fixtures/sample_repo/src/event_manager.ex");
+        let symbols = extract_symbols("elixir", source);
+
+        assert!(symbols.contains(&"MyApp.EventManager".to_string()));
+        assert!(symbols.contains(&"new".to_string()));
+        assert!(symbols.contains(&"subscribe".to_string()));
+        assert!(symbols.contains(&"dispatch_to_handler".to_string()));
+        assert!(symbols.contains(&"log_event".to_string()));
+        assert!(symbols.contains(&"defevent".to_string()));
+        assert!(symbols.contains(&"validate_handler".to_string()));
+        assert!(symbols.contains(&"is_event".to_string()));
+        assert!(symbols.contains(&"is_valid_name".to_string()));
+        assert!(symbols.contains(&"run".to_string()));
+        assert!(symbols.contains(&"MyApp.EventManager.Supervisor".to_string()));
+        assert!(symbols.contains(&"start_link".to_string()));
+        assert!(symbols.contains(&"MyApp.Publishable".to_string()));
+        assert!(symbols.contains(&"to_event".to_string()));
+        assert!(symbols.contains(&"MyApp.EventManager.Delegate".to_string()));
+        assert!(symbols.contains(&"fetch".to_string()));
+    }
+
+    #[test]
+    fn elixir_nested_modules() {
+        let source = br#"
+defmodule MyApp.Outer do
+  defmodule Inner do
+    def hello, do: :world
+  end
+
+  def greet, do: :hi
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        assert!(symbols.contains(&"MyApp.Outer".to_string()), "should find outer module");
+        assert!(symbols.contains(&"Inner".to_string()), "should find nested module");
+        assert!(symbols.contains(&"hello".to_string()), "should find inner function");
+        assert!(symbols.contains(&"greet".to_string()), "should find outer function");
+    }
+
+    #[test]
+    fn elixir_no_arg_function() {
+        let source = br#"
+defmodule M do
+  def run do
+    :ok
+  end
+
+  defp setup do
+    :ready
+  end
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        assert!(symbols.contains(&"run".to_string()), "should find no-arg def");
+        assert!(symbols.contains(&"setup".to_string()), "should find no-arg defp");
+    }
+
+    #[test]
+    fn elixir_guarded_function() {
+        let source = br#"
+defmodule M do
+  defguard is_admin(user) when user.role == :admin
+  defguardp is_active(user) when user.active == true
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        assert!(symbols.contains(&"is_admin".to_string()), "should find defguard");
+        assert!(symbols.contains(&"is_active".to_string()), "should find defguardp");
+    }
+
+    #[test]
+    fn elixir_multi_clause_functions_deduplicate() {
+        let source = br#"
+defmodule M do
+  def process(:add, x, y), do: x + y
+  def process(:sub, x, y), do: x - y
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        let count = symbols.iter().filter(|s| *s == "process").count();
+        assert_eq!(count, 1, "multi-clause function 'process' should appear exactly once after dedup");
+    }
+
+    #[test]
+    fn elixir_pattern_matching_in_function_heads() {
+        let source = br#"
+defmodule M do
+  def handle_call({:get, key}, _from, state) do
+    {:reply, Map.get(state, key), state}
+  end
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        assert!(symbols.contains(&"handle_call".to_string()), "should extract handle_call with pattern-matched args");
+    }
+
+    #[test]
+    fn elixir_default_arguments() {
+        let source = br#"
+defmodule M do
+  def connect(host, port \\ 4000) do
+    {host, port}
+  end
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        assert!(symbols.contains(&"connect".to_string()), "should extract connect with default argument");
+    }
+
+    #[test]
+    fn elixir_callback_and_spec_not_extracted() {
+        let source = br#"
+defmodule MyBehaviour do
+  @callback init(opts :: keyword()) :: {:ok, term()}
+  @spec validate(term()) :: boolean()
+  def validate(x), do: is_map(x)
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        assert!(symbols.contains(&"validate".to_string()), "should extract def validate");
+        assert!(!symbols.contains(&"init".to_string()), "@callback should NOT produce a symbol");
+        assert!(!symbols.contains(&"callback".to_string()), "'callback' should NOT be a symbol");
+        assert!(!symbols.contains(&"spec".to_string()), "'spec' should NOT be a symbol");
+    }
+
+    #[test]
+    fn elixir_defstruct_not_standalone_symbol() {
+        let source = br#"
+defmodule User do
+  defstruct [:name, :email]
+end
+"#;
+
+        let symbols = extract_symbols("elixir", source);
+        assert!(symbols.contains(&"User".to_string()), "should extract module User");
+        assert!(!symbols.contains(&"defstruct".to_string()), "defstruct should NOT produce a standalone symbol");
     }
 
     #[test]

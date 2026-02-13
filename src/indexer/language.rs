@@ -9,6 +9,7 @@ pub fn detect_language(path: &Path) -> Option<&'static str> {
         "go" => Some("go"),
         "js" | "jsx" | "mjs" | "cjs" => Some("javascript"),
         "ts" | "tsx" | "mts" | "cts" => Some("typescript"),
+        "ex" | "exs" => Some("elixir"),
         _ => None,
     }
 }
@@ -27,6 +28,8 @@ mod tests {
         assert_eq!(detect_language(Path::new("qux.ts")), Some("typescript"));
         assert_eq!(detect_language(Path::new("qux.tsx")), Some("typescript"));
         assert_eq!(detect_language(Path::new("qux.jsx")), Some("javascript"));
+        assert_eq!(detect_language(Path::new("app.ex")), Some("elixir"));
+        assert_eq!(detect_language(Path::new("test_helper.exs")), Some("elixir"));
     }
 
     #[test]

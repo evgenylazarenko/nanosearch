@@ -1,6 +1,6 @@
 [package]
 name = "ns"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 [dependencies]
@@ -19,6 +19,7 @@ tree-sitter-python = "0.25"
 tree-sitter-go = "0.25"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
+tree-sitter-elixir = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

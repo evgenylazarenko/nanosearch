@@ -55,9 +55,13 @@ ns builds a local search index in `.ns/` at your repo root. Files are indexed wi
 
 The index is file-level, not line-level. BM25 tells the agent "look in this file." Context lines are extracted post-search by re-reading the top result files, which is fast since only a handful of files are scanned.
 
-### Symbol extraction
+### Language support
 
-ns uses tree-sitter to extract function names, class names, struct names, type definitions, and other symbols from source files. Supported languages:
+ns indexes **all text files** in your repository — any language, any file type. Every file gets full-text BM25 search. You can search a Ruby, C++, or Haskell codebase without any special configuration.
+
+For a subset of languages, ns also parses the source with [tree-sitter](https://tree-sitter.github.io/) to extract **symbol names** (functions, classes, types, etc.). These symbols are indexed in a separate field with a **3x relevance boost**, so searching `"EventStore"` ranks the file where `EventStore` is *defined* above files that merely mention it in a comment or import.
+
+**Languages with symbol extraction:**
 
 | Language | Extensions | Symbols extracted |
 |----------|-----------|-------------------|
@@ -66,8 +70,14 @@ ns uses tree-sitter to extract function names, class names, struct names, type d
 | JavaScript | `.js` `.jsx` `.mjs` `.cjs` | functions, classes, methods, top-level consts |
 | Python | `.py` `.pyi` | functions, classes (including decorated) |
 | Go | `.go` | functions, methods, types, consts |
+| Elixir | `.ex` `.exs` | modules, functions (def/defp), macros, protocols, impls, guards, delegates, structs |
 
-Files in other languages are still indexed by content — they just don't get symbol boosting.
+**What this means in practice:**
+
+- **Supported language:** `ns --sym -- "EventStore"` finds where `EventStore` is defined. `ns -- "EventStore"` returns the definition file first, then files that reference it.
+- **Any other language:** `ns -- "EventStore"` still works — it searches file content via BM25. Results are ranked by term frequency and document length, but without the symbol definition boost. `--sym` will return no results since there are no extracted symbols.
+
+Both modes use the same index. No configuration needed — just `ns index` and search.
 
 ## Commands
 

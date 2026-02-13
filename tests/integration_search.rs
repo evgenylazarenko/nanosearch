@@ -212,6 +212,38 @@ fn symbol_search_finds_js_functions() {
     );
 }
 
+#[test]
+fn symbol_search_finds_elixir_modules_and_functions() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "EventManager", &opts(10))
+            .expect("search should work");
+
+    assert!(!results.is_empty(), "should find results for 'EventManager'");
+    assert!(
+        results[0].path.contains("event_manager.ex"),
+        "event_manager.ex (defines EventManager module) should rank first, got: {}",
+        results[0].path
+    );
+}
+
+#[test]
+fn symbol_search_finds_elixir_protocol() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let (results, _stats) =
+        ns::searcher::query::execute_search(&root, "Publishable", &opts(10))
+            .expect("search should work");
+
+    assert!(!results.is_empty(), "should find results for 'Publishable'");
+    let has_elixir = results.iter().any(|r| r.path.contains("event_manager.ex"));
+    assert!(
+        has_elixir,
+        "event_manager.ex should appear in results for 'Publishable'"
+    );
+}
+
 // ── Phase 5: Filters, flags, output modes ─────────────────────────────────────
 
 #[test]
