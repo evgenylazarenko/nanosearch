@@ -55,6 +55,14 @@ pub struct Cli {
     /// Fuzzy search
     #[arg(long = "fuzzy")]
     pub fuzzy: bool,
+
+    /// Max context lines per file (0 = unlimited)
+    #[arg(long = "max-context-lines", default_value_t = 30)]
+    pub max_context_lines: usize,
+
+    /// Token budget for total output (approximate)
+    #[arg(long = "budget")]
+    pub budget: Option<usize>,
 }
 
 #[derive(Subcommand)]
@@ -104,6 +112,14 @@ pub struct SearchSubArgs {
     /// Fuzzy search
     #[arg(long = "fuzzy")]
     pub fuzzy: bool,
+
+    /// Max context lines per file (0 = unlimited)
+    #[arg(long = "max-context-lines", default_value_t = 30)]
+    pub max_context_lines: usize,
+
+    /// Token budget for total output (approximate)
+    #[arg(long = "budget")]
+    pub budget: Option<usize>,
 }
 
 #[derive(Parser)]
@@ -140,6 +156,8 @@ pub struct SearchArgs {
     pub json: bool,
     pub sym: bool,
     pub fuzzy: bool,
+    pub max_context_lines: usize,
+    pub budget: Option<usize>,
 }
 
 impl SearchArgs {
@@ -154,6 +172,8 @@ impl SearchArgs {
             json: cli.json,
             sym: cli.sym,
             fuzzy: cli.fuzzy,
+            max_context_lines: cli.max_context_lines,
+            budget: cli.budget,
         }
     }
 
@@ -168,6 +188,8 @@ impl SearchArgs {
             json: sub.json,
             sym: sub.sym,
             fuzzy: sub.fuzzy,
+            max_context_lines: sub.max_context_lines,
+            budget: sub.budget,
         }
     }
 }

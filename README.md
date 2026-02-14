@@ -53,7 +53,7 @@ ns hooks install
 
 ns builds a local search index in `.ns/` at your repo root. Files are indexed with [tantivy](https://github.com/quickwit-oss/tantivy) (BM25 scoring) and parsed with [tree-sitter](https://tree-sitter.github.io/) to extract symbol names. When you search, results are ranked by relevance with a 3x boost for symbol matches — so `ns -- "EventStore"` ranks the file where `EventStore` is defined above files that merely import it.
 
-The index is file-level, not line-level. BM25 tells the agent "look in this file." Context lines are extracted post-search by re-reading the top result files, which is fast since only a handful of files are scanned.
+The index is file-level, not line-level. This is a deliberate design choice: ripgrep returns every matching *line* independently — search `"handler"` and get 200 decontextualized lines from 50 files. ns returns the 10 most relevant *files* ranked by score, then shows a few context lines from each. The agent gets "look in these files" instead of a flood of scattered line matches. BM25 tells the agent where to look; the agent reads the file to understand it.
 
 ### Language support
 

@@ -57,6 +57,10 @@ pub struct SearchOptions {
     pub sym_only: bool,
     /// Use fuzzy matching (Levenshtein distance 1).
     pub fuzzy: bool,
+    /// Maximum context lines per file. Some(0) means unlimited. Default: Some(30).
+    pub max_context_lines: Option<usize>,
+    /// Token budget for total output. None means unlimited (default).
+    pub budget: Option<usize>,
 }
 
 impl Default for SearchOptions {
@@ -68,6 +72,8 @@ impl Default for SearchOptions {
             file_glob: None,
             sym_only: false,
             fuzzy: false,
+            max_context_lines: Some(30),
+            budget: None,
         }
     }
 }

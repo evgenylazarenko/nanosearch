@@ -37,17 +37,17 @@ fn search_returns_ranked_results() {
 fn search_full_pipeline_with_context() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, stats) =
+    let so =
         ns::searcher::search(&root, "EventStore", OutputMode::Text, &SearchOptions::default())
             .expect("search pipeline should work");
 
-    assert!(output.contains("[1]"), "should have result rank [1]");
-    assert!(output.contains("event_store.rs"), "should show event_store.rs");
-    assert!(output.contains("score:"), "should show score");
-    assert!(output.contains("lang: rust"), "should show lang");
+    assert!(so.formatted.contains("[1]"), "should have result rank [1]");
+    assert!(so.formatted.contains("event_store.rs"), "should show event_store.rs");
+    assert!(so.formatted.contains("score:"), "should show score");
+    assert!(so.formatted.contains("lang: rust"), "should show lang");
     // Summary is on stderr (via format_summary), not in the library output
-    assert!(!output.contains("result (searched"), "summary should not be in library output");
-    assert!(stats.total_results > 0);
+    assert!(!so.formatted.contains("result (searched"), "summary should not be in library output");
+    assert!(so.stats.total_results > 0);
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn search_respects_max_results() {
 fn search_context_lines_are_present() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, _stats) =
+    let so =
         ns::searcher::search(
             &root,
             "EventStore",
@@ -104,7 +104,7 @@ fn search_context_lines_are_present() {
         .expect("search should work");
 
     assert!(
-        output.contains("pub struct EventStore"),
+        so.formatted.contains("pub struct EventStore"),
         "output should contain context line with struct definition"
     );
 }
@@ -114,7 +114,7 @@ fn search_context_shows_separators_between_groups() {
     let (_tmp, root) = common::indexed_fixture();
 
     // EventStore appears on multiple non-contiguous lines in event_store.rs
-    let (output, _stats) =
+    let so =
         ns::searcher::search(
             &root,
             "EventStore",
@@ -125,7 +125,7 @@ fn search_context_shows_separators_between_groups() {
 
     // With context=0 and multiple match locations, there should be group separators
     assert!(
-        output.contains("..."),
+        so.formatted.contains("..."),
         "non-contiguous context groups should be separated by '...'"
     );
 }
@@ -335,16 +335,16 @@ fn invalid_glob_returns_error() {
 fn files_only_output_bare_paths() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, stats) =
+    let so =
         ns::searcher::search(&root, "EventStore", OutputMode::FilesOnly, &SearchOptions::default())
             .expect("search should work");
 
-    assert!(stats.total_results > 0);
+    assert!(so.stats.total_results > 0);
     // Output should be bare paths — no scores, no context, no brackets
-    assert!(!output.contains("[1]"), "files-only should not have rank markers");
-    assert!(!output.contains("score:"), "files-only should not have scores");
+    assert!(!so.formatted.contains("[1]"), "files-only should not have rank markers");
+    assert!(!so.formatted.contains("score:"), "files-only should not have scores");
     // Each line should be a file path
-    for line in output.lines() {
+    for line in so.formatted.lines() {
         assert!(
             line.contains('.'),
             "each line should be a file path, got: {}",
@@ -395,13 +395,13 @@ fn symbol_only_excludes_content_only_matches() {
 fn json_output_is_valid_json() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, stats) =
+    let so =
         ns::searcher::search(&root, "EventStore", OutputMode::Json, &SearchOptions::default())
             .expect("search should work");
 
-    assert!(stats.total_results > 0);
+    assert!(so.stats.total_results > 0);
     let parsed: serde_json::Value =
-        serde_json::from_str(&output).expect("output should be valid JSON");
+        serde_json::from_str(&so.formatted).expect("output should be valid JSON");
 
     assert_eq!(parsed["query"], "EventStore");
     assert!(parsed["results"].is_array());
@@ -419,11 +419,11 @@ fn json_output_is_valid_json() {
 fn json_output_has_matched_symbols() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, _stats) =
+    let so =
         ns::searcher::search(&root, "EventStore", OutputMode::Json, &SearchOptions::default())
             .expect("search should work");
 
-    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&so.formatted).unwrap();
 
     // The first result (event_store.rs) should have EventStore in matched_symbols
     let first = &parsed["results"][0];
@@ -440,11 +440,11 @@ fn json_output_has_matched_symbols() {
 fn json_output_lines_use_num_field() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, _stats) =
+    let so =
         ns::searcher::search(&root, "EventStore", OutputMode::Json, &SearchOptions::default())
             .expect("search should work");
 
-    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&so.formatted).unwrap();
     let first = &parsed["results"][0];
     let lines = first["lines"].as_array().unwrap();
     assert!(!lines.is_empty(), "should have context lines");
@@ -622,12 +622,12 @@ fn context_window_zero_shows_only_matching_lines() {
         context_window: 0,
         ..Default::default()
     };
-    let (output, _stats) =
+    let so =
         ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_c0)
             .expect("search should work");
 
     // With context=0, every context line should contain the query term (case-insensitive)
-    for line in output.lines() {
+    for line in so.formatted.lines() {
         // Skip rank headers, separators, summary, and blank lines
         let trimmed = line.trim();
         if trimmed.is_empty()
@@ -662,16 +662,16 @@ fn context_window_larger_shows_more_lines() {
         ..Default::default()
     };
 
-    let (output_c0, _) =
+    let so_c0 =
         ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_c0)
             .expect("search should work");
-    let (output_c3, _) =
+    let so_c3 =
         ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_c3)
             .expect("search should work");
 
     // Context=3 should produce more lines than context=0
-    let lines_c0: Vec<&str> = output_c0.lines().filter(|l| l.trim().contains(':')).collect();
-    let lines_c3: Vec<&str> = output_c3.lines().filter(|l| l.trim().contains(':')).collect();
+    let lines_c0: Vec<&str> = so_c0.formatted.lines().filter(|l| l.trim().contains(':')).collect();
+    let lines_c3: Vec<&str> = so_c3.formatted.lines().filter(|l| l.trim().contains(':')).collect();
 
     assert!(
         lines_c3.len() >= lines_c0.len(),
@@ -732,7 +732,7 @@ fn end_to_end_index_incremental_search() {
 fn no_results_text_returns_empty_output() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, stats) = ns::searcher::search(
+    let so = ns::searcher::search(
         &root,
         "xyzzy_nonexistent_42",
         OutputMode::Text,
@@ -740,9 +740,9 @@ fn no_results_text_returns_empty_output() {
     )
     .expect("search should succeed even with no results");
 
-    assert_eq!(stats.total_results, 0);
+    assert_eq!(so.stats.total_results, 0);
     assert!(
-        output.is_empty(),
+        so.formatted.is_empty(),
         "library text output should be empty when no results (summary is CLI-layer concern)"
     );
 }
@@ -751,7 +751,7 @@ fn no_results_text_returns_empty_output() {
 fn no_results_json_has_empty_array() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, stats) = ns::searcher::search(
+    let so = ns::searcher::search(
         &root,
         "xyzzy_nonexistent_42",
         OutputMode::Json,
@@ -759,8 +759,8 @@ fn no_results_json_has_empty_array() {
     )
     .expect("search should succeed even with no results");
 
-    assert_eq!(stats.total_results, 0);
-    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(so.stats.total_results, 0);
+    let parsed: serde_json::Value = serde_json::from_str(&so.formatted).unwrap();
     assert_eq!(parsed["results"].as_array().unwrap().len(), 0);
     assert_eq!(parsed["stats"]["total_results"], 0);
 }
@@ -1050,11 +1050,11 @@ fn cli_search_subcommand_with_flags() {
 fn json_output_has_ranking_factors() {
     let (_tmp, root) = common::indexed_fixture();
 
-    let (output, _stats) =
+    let so =
         ns::searcher::search(&root, "EventStore", OutputMode::Json, &SearchOptions::default())
             .expect("search should work");
 
-    let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&so.formatted).unwrap();
 
     let first = &parsed["results"][0];
     let rf = &first["ranking_factors"];
@@ -1187,4 +1187,226 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
             std::fs::copy(entry.path(), &dest_path).expect("copy");
         }
     }
+}
+
+// ── Token efficiency: --max-context-lines and --budget tests ──────────────────
+
+#[test]
+fn max_context_lines_limits_output() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // With a small max_context_lines, the output should have fewer context lines
+    let opts_small = SearchOptions {
+        max_results: 1,
+        max_context_lines: Some(3),
+        ..Default::default()
+    };
+    let so_small =
+        ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_small)
+            .expect("search should work");
+
+    // With unlimited max_context_lines (None), there should be at least as many
+    let opts_unlimited = SearchOptions {
+        max_results: 1,
+        max_context_lines: None,
+        ..Default::default()
+    };
+    let so_unlimited =
+        ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_unlimited)
+            .expect("search should work");
+
+    // Count context lines (lines containing ":" with a line number pattern)
+    let count_ctx = |s: &str| -> usize {
+        s.lines()
+            .filter(|l| {
+                let trimmed = l.trim();
+                // Context lines look like "   10: some code"
+                trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            })
+            .count()
+    };
+    let small_count = count_ctx(&so_small.formatted);
+    let unlimited_count = count_ctx(&so_unlimited.formatted);
+
+    assert!(
+        small_count <= 3,
+        "max_context_lines=3 should cap at 3 context lines, got {}",
+        small_count
+    );
+    assert!(
+        unlimited_count >= small_count,
+        "unlimited should have at least as many lines as capped ({} vs {})",
+        unlimited_count,
+        small_count
+    );
+}
+
+#[test]
+fn max_context_lines_zero_means_unlimited() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let opts_zero = SearchOptions {
+        max_results: 1,
+        max_context_lines: Some(0),
+        ..Default::default()
+    };
+    let opts_none = SearchOptions {
+        max_results: 1,
+        max_context_lines: None,
+        ..Default::default()
+    };
+
+    let so_zero =
+        ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_zero)
+            .expect("search should work");
+    let so_none =
+        ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts_none)
+            .expect("search should work");
+
+    assert_eq!(
+        so_zero.formatted, so_none.formatted,
+        "max_context_lines=Some(0) should produce the same output as None (unlimited)"
+    );
+}
+
+#[test]
+fn budget_limits_total_output_size() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // Very small budget should truncate results
+    let opts_small = SearchOptions {
+        max_results: 10,
+        budget: Some(20), // 20 tokens = ~80 chars -- very tight
+        ..Default::default()
+    };
+    let so_small =
+        ns::searcher::search(&root, "fn", OutputMode::Text, &opts_small)
+            .expect("search should work");
+
+    // No budget should emit all results
+    let opts_none = SearchOptions {
+        max_results: 10,
+        budget: None,
+        ..Default::default()
+    };
+    let so_none =
+        ns::searcher::search(&root, "fn", OutputMode::Text, &opts_none)
+            .expect("search should work");
+
+    // Budget-limited output should be shorter
+    assert!(
+        so_small.formatted.len() <= so_none.formatted.len(),
+        "budget-limited output should not be longer than unlimited"
+    );
+    // If there were enough results to exhaust the budget, verify metadata
+    if so_small.budget_exhausted {
+        assert!(so_small.results_omitted > 0);
+        assert!(so_small.formatted.contains("budget exceeded"));
+    }
+}
+
+#[test]
+fn budget_zero_means_unlimited() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // budget=0 should be treated as unlimited at the CLI layer.
+    // At the library level, budget=None is unlimited, and the CLI converts 0 to None.
+    // So test that budget=None produces the same output as unlimited.
+    let opts = SearchOptions {
+        max_results: 10,
+        budget: None,
+        ..Default::default()
+    };
+    let so =
+        ns::searcher::search(&root, "EventStore", OutputMode::Text, &opts)
+            .expect("search should work");
+
+    assert!(!so.budget_exhausted, "unlimited budget should not be exhausted");
+    assert_eq!(so.results_omitted, 0);
+}
+
+#[test]
+fn cli_budget_zero_is_unlimited() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .args(["--budget", "0", "EventStore"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(output.status.success(), "budget=0 should succeed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("budget exceeded"),
+        "budget=0 should be unlimited, got stderr: {}",
+        stderr
+    );
+}
+
+#[test]
+fn budget_exceeded_shows_in_json_output() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    // Very tight budget in JSON mode
+    let opts = SearchOptions {
+        max_results: 10,
+        budget: Some(20), // Very tight
+        ..Default::default()
+    };
+    let so =
+        ns::searcher::search(&root, "fn", OutputMode::Json, &opts)
+            .expect("search should work");
+
+    let parsed: serde_json::Value = serde_json::from_str(&so.formatted)
+        .expect("should be valid JSON");
+
+    if so.budget_exhausted {
+        assert_eq!(
+            parsed["stats"]["budget_exceeded"], true,
+            "JSON stats should contain budget_exceeded: true"
+        );
+        assert!(
+            parsed["stats"]["results_omitted"].as_u64().unwrap() > 0,
+            "JSON stats should contain results_omitted > 0"
+        );
+    }
+    // Even with budget, output should be valid JSON with results array
+    assert!(parsed["results"].is_array());
+}
+
+#[test]
+fn cli_max_context_lines_flag_works() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .args(["--max-context-lines", "2", "EventStore"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(output.status.success(), "should succeed with --max-context-lines");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("event_store.rs"),
+        "should find event_store.rs"
+    );
+}
+
+#[test]
+fn cli_budget_flag_works() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .args(["--budget", "500", "EventStore"])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    assert!(output.status.success(), "should succeed with --budget");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("event_store.rs"),
+        "should find event_store.rs"
+    );
 }

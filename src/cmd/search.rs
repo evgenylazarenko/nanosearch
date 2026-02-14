@@ -26,6 +26,18 @@ pub fn run(args: &SearchArgs) {
         OutputMode::Text
     };
 
+    let max_context_lines = if args.max_context_lines == 0 {
+        Some(0) // 0 means unlimited
+    } else {
+        Some(args.max_context_lines)
+    };
+
+    // --budget 0 means unlimited (consistent with --max-context-lines 0)
+    let budget = match args.budget {
+        Some(0) => None,
+        other => other,
+    };
+
     let opts = SearchOptions {
         max_results: args.max_count,
         context_window: args.context,
@@ -33,21 +45,31 @@ pub fn run(args: &SearchArgs) {
         file_glob: args.file_glob.clone(),
         sym_only: args.sym,
         fuzzy: args.fuzzy,
+        max_context_lines,
+        budget,
     };
 
     match searcher::search(&root, &args.query, output_mode, &opts) {
-        Ok((output, stats)) => {
+        Ok(search_output) => {
+            let output = &search_output.formatted;
+            let stats = &search_output.stats;
             if stats.total_results == 0 {
                 // JSON mode: print the body to stdout (structured data for consumers)
                 if is_json {
                     print!("{}", output);
                 }
                 // Summary to stderr — consistent with exit 1 (rg convention)
-                eprintln!("{}", format_summary(&stats));
+                eprintln!("{}", format_summary(stats));
                 std::process::exit(1);
             } else {
                 print!("{}", output);
-                eprintln!("{}", format_summary(&stats));
+                if search_output.budget_exhausted {
+                    eprintln!(
+                        "warning: token budget exceeded, {} results omitted",
+                        search_output.results_omitted
+                    );
+                }
+                eprintln!("{}", format_summary(stats));
                 stats::record_search(&root, output.len());
             }
         }
