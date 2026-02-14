@@ -6,6 +6,7 @@ use crate::searcher;
 use crate::searcher::format::format_summary;
 use crate::searcher::query::SearchOptions;
 use crate::searcher::OutputMode;
+use crate::indexer::writer::utc_timestamp_iso8601;
 use crate::stats;
 
 pub fn run(args: &SearchArgs) {
@@ -18,12 +19,12 @@ pub fn run(args: &SearchArgs) {
     };
 
     let is_json = args.json;
-    let output_mode = if args.files_only {
-        OutputMode::FilesOnly
+    let (output_mode, mode_str) = if args.files_only {
+        (OutputMode::FilesOnly, "files")
     } else if args.json {
-        OutputMode::Json
+        (OutputMode::Json, "json")
     } else {
-        OutputMode::Text
+        (OutputMode::Text, "text")
     };
 
     let max_context_lines = if args.max_context_lines == 0 {
@@ -71,6 +72,16 @@ pub fn run(args: &SearchArgs) {
                 }
                 eprintln!("{}", format_summary(stats));
                 stats::record_search(&root, output.len());
+                stats::record_search_log(&root, stats::SearchLogEntry {
+                    ts: utc_timestamp_iso8601(),
+                    v: env!("CARGO_PKG_VERSION"),
+                    query: args.query.clone(),
+                    tokens: output.len() / 4,
+                    lines: output.lines().count(),
+                    files: stats.total_results,
+                    mode: mode_str.to_string(),
+                    budget,
+                });
             }
         }
         Err(err) => {

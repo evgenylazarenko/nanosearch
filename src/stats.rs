@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,30 @@ fn record_search_inner(root: &Path, output_chars: usize) -> Option<()> {
     let path = root.join(".ns").join("stats.json");
     let json = serde_json::to_string_pretty(&stats).ok()?;
     fs::write(&path, json).ok()
+}
+
+#[derive(Serialize)]
+pub struct SearchLogEntry {
+    pub ts: String,
+    pub v: &'static str,
+    pub query: String,
+    pub tokens: usize,
+    pub lines: usize,
+    pub files: usize,
+    pub mode: String,
+    pub budget: Option<usize>,
+}
+
+/// Appends one JSON line to `.ns/search_log.jsonl`. Fire-and-forget.
+pub fn record_search_log(root: &Path, entry: SearchLogEntry) {
+    let _ = record_search_log_inner(root, &entry);
+}
+
+fn record_search_log_inner(root: &Path, entry: &SearchLogEntry) -> Option<()> {
+    let path = root.join(".ns").join("search_log.jsonl");
+    let line = serde_json::to_string(entry).ok()?;
+    let mut f = OpenOptions::new().create(true).append(true).open(path).ok()?;
+    writeln!(f, "{}", line).ok()
 }
 
 pub fn format_token_count(tokens: u64) -> String {
@@ -95,6 +120,49 @@ mod tests {
         assert_eq!(format_token_count(500), "500");
         assert_eq!(format_token_count(21355), "~21.4k");
         assert_eq!(format_token_count(1_500_000), "~1.5M");
+    }
+
+    #[test]
+    fn search_log_appends_valid_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join(".ns")).unwrap();
+
+        let entry1 = SearchLogEntry {
+            ts: "2026-02-13T10:30:00Z".to_string(),
+            v: "0.1.5",
+            query: "EventStore".to_string(),
+            tokens: 84,
+            lines: 12,
+            files: 2,
+            mode: "text".to_string(),
+            budget: None,
+        };
+        record_search_log(root, entry1);
+
+        let entry2 = SearchLogEntry {
+            ts: "2026-02-13T10:31:00Z".to_string(),
+            v: "0.1.5",
+            query: "Validator".to_string(),
+            tokens: 40,
+            lines: 5,
+            files: 1,
+            mode: "json".to_string(),
+            budget: Some(500),
+        };
+        record_search_log(root, entry2);
+
+        let content = fs::read_to_string(root.join(".ns/search_log.jsonl")).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        let v1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(v1["query"], "EventStore");
+        assert_eq!(v1["budget"], serde_json::Value::Null);
+
+        let v2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(v2["query"], "Validator");
+        assert_eq!(v2["budget"], 500);
     }
 
     #[test]
