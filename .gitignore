@@ -16,3 +16,4 @@ docs/
 # Local agent orchestration files
 AGENTS.md
 agent_specs/
+autobuild

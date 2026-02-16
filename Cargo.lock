@@ -708,9 +708,10 @@ dependencies = [
 
 [[package]]
 name = "ns"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "clap",
+ "fs4",
  "glob",
  "ignore",
  "libc",
