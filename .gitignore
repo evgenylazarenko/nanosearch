@@ -12,3 +12,7 @@ docs/
 
 # ns index directory
 .ns/
+
+# Local agent orchestration files
+AGENTS.md
+agent_specs/

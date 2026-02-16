@@ -99,6 +99,8 @@ ns -l -- "middleware"               # file paths only
 ns --json -- "UserRepo"             # JSON output (for programmatic use)
 ns -m 20 -- "store"                 # return up to 20 results
 ns -C 3 -- "handler"               # 3 lines of context around matches
+ns --budget 500 -- "handler"       # cap output at ~500 tokens
+ns --max-context-lines 10 -- "q"   # max 10 context lines per file
 ```
 
 For simple queries that don't collide with subcommand names, `ns "query"` still works. There is also an explicit `ns search "query"` subcommand as an alternative.
@@ -115,6 +117,8 @@ For simple queries that don't collide with subcommand names, `ns "query"` still 
 | `--sym` | Search symbol names only (functions, types, traits, etc.) |
 | `--fuzzy` | Enable typo tolerance |
 | `--json` | Output as JSON |
+| `--budget <N>` | Cap total output at ~N estimated tokens (0 = unlimited) |
+| `--max-context-lines <N>` | Max context lines per file (default: 30, 0 = unlimited) |
 | `-i, --ignore-case` | Accepted for rg compatibility (search is always case-insensitive) |
 
 **Exit codes:** `0` = results found, `1` = no results or error.
@@ -168,20 +172,7 @@ ns hooks remove
 **JSON (`--json`):**
 
 ```json
-{
-  "results": [
-    {
-      "path": "src/event_store.rs",
-      "score": 12.4,
-      "lang": "rust",
-      "matched_symbols": ["EventStore"],
-      "lines": [
-        { "num": 42, "text": "pub struct EventStore {" }
-      ]
-    }
-  ],
-  "stats": { "total_results": 1, "files_searched": 847, "elapsed_ms": 2 }
-}
+{"query":"EventStore","results":[{"path":"src/event_store.rs","score":12.4,"lang":"rust","matched_symbols":["EventStore"],"lines":[{"num":42,"text":"pub struct EventStore {"}]}],"stats":{"total_results":1,"files_searched":847,"elapsed_ms":2}}
 ```
 
 **Files only (`-l`):**
@@ -246,9 +237,11 @@ Always use `--` before the query to separate flags from the search term:
 - `ns --json -- "query"` — structured output with scores and matched symbols.
 - `ns --fuzzy -- "query"` — if exact search returns nothing, retry with typo tolerance.
 - `ns -l -- "query"` — get just file paths (useful for batch operations).
+- `ns --budget 500 -- "query"` — cap output at ~500 tokens to save context window.
 - `ns index --incremental` — re-index if results seem stale.
 
 ns flags mirror ripgrep. If you know rg flags, they work the same way in ns.
+Context lines are capped at 30 per file by default to prevent token-heavy output.
 ```
 
 ### Why not just use ripgrep?
@@ -287,6 +280,31 @@ echo '.ns/' >> .gitignore
 ```
 
 ns will warn you if `.ns/` isn't gitignored.
+
+## Search telemetry (`.ns/search_log.jsonl`)
+
+Each search invocation appends one JSON line to `.ns/search_log.jsonl`, including:
+- successful searches
+- zero-result searches
+- failed searches
+
+Entry fields:
+- `ts`, `v`, `query`
+- `tokens`, `lines`, `files`, `mode`, `budget`
+- `outcome` (`success`, `no_results`, `error`)
+- `zero_results` (`true`/`false`)
+- `flags` (normalized parsed options)
+- `argv` (raw CLI arguments)
+- `error` (`null` or `{ "code": "...", "message": "..." }`)
+
+Current error codes:
+- `no_index`
+- `schema_mismatch`
+- `invalid_query`
+- `invalid_glob`
+- `corrupt_meta`
+- `index_locked`
+- `search_failed`
 
 ## Dependencies
 

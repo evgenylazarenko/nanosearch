@@ -116,7 +116,7 @@ pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<FullIndexStats, 
     };
 
     let meta_path = ns_dir.join("meta.json");
-    let meta_json = serde_json::to_string_pretty(&meta)?;
+    let meta_json = serde_json::to_string(&meta)?;
     fs::write(&meta_path, &meta_json)?;
 
     Ok(FullIndexStats {

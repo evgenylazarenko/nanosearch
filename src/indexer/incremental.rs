@@ -117,7 +117,7 @@ pub fn run_incremental(
     };
 
     let meta_path = root.join(".ns").join("meta.json");
-    let meta_json = serde_json::to_string_pretty(&new_meta)?;
+    let meta_json = serde_json::to_string(&new_meta)?;
     fs::write(&meta_path, &meta_json)?;
 
     let stats = IncrementalStats {

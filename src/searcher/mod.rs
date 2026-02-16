@@ -204,7 +204,7 @@ fn build_json_with_budget(
         "stats": stats_obj,
     });
 
-    let formatted = serde_json::to_string_pretty(&json).unwrap_or_else(|_| "{}".to_string());
+    let formatted = serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string());
     (formatted, budget_exhausted, results_omitted)
 }
 
@@ -385,4 +385,3 @@ mod tests {
         );
     }
 }
-

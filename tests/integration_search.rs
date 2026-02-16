@@ -571,7 +571,7 @@ fn search_with_stale_schema_version_returns_error() {
     // Tamper with meta.json to simulate a stale schema version
     let meta_path = root.join(".ns").join("meta.json");
     let content = std::fs::read_to_string(&meta_path).expect("should read meta");
-    let tampered = content.replace("\"schema_version\": 2", "\"schema_version\": 999");
+    let tampered = content.replace("\"schema_version\":2", "\"schema_version\":999");
     std::fs::write(&meta_path, &tampered).expect("should write tampered meta");
 
     let result = ns::searcher::search(
@@ -815,7 +815,7 @@ fn cli_search_stale_schema_stderr_and_exit_code() {
     // Tamper with meta.json
     let meta_path = root.join(".ns").join("meta.json");
     let content = std::fs::read_to_string(&meta_path).expect("should read meta");
-    let tampered = content.replace("\"schema_version\": 2", "\"schema_version\": 999");
+    let tampered = content.replace("\"schema_version\":2", "\"schema_version\":999");
     std::fs::write(&meta_path, &tampered).expect("should write tampered meta");
 
     let output = std::process::Command::new(ns_binary())

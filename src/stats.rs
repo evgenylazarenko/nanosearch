@@ -36,7 +36,7 @@ fn record_search_inner(root: &Path, output_chars: usize) -> Option<()> {
     stats.total_estimated_tokens += (output_chars / 4) as u64;
 
     let path = root.join(".ns").join("stats.json");
-    let json = serde_json::to_string_pretty(&stats).ok()?;
+    let json = serde_json::to_string(&stats).ok()?;
     fs::write(&path, json).ok()
 }
 
@@ -169,7 +169,7 @@ mod tests {
 
         let entry1 = SearchLogEntry {
             ts: "2026-02-13T10:30:00Z".to_string(),
-            v: "0.1.5",
+            v: "0.1.6",
             query: "EventStore".to_string(),
             tokens: 84,
             lines: 12,
@@ -198,7 +198,7 @@ mod tests {
 
         let entry2 = SearchLogEntry {
             ts: "2026-02-13T10:31:00Z".to_string(),
-            v: "0.1.5",
+            v: "0.1.6",
             query: "Validator".to_string(),
             tokens: 40,
             lines: 5,
@@ -262,7 +262,7 @@ mod tests {
 
         let entry = SearchLogEntry {
             ts: "2026-02-13T10:30:00Z".to_string(),
-            v: "0.1.5",
+            v: "0.1.6",
             query: "EventStore".to_string(),
             tokens: 84,
             lines: 12,
