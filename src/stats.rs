@@ -50,6 +50,40 @@ pub struct SearchLogEntry {
     pub files: usize,
     pub mode: String,
     pub budget: Option<usize>,
+    pub outcome: SearchOutcome,
+    pub zero_results: bool,
+    pub flags: SearchLogFlags,
+    pub argv: Vec<String>,
+    pub error: Option<SearchLogError>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchOutcome {
+    Success,
+    NoResults,
+    Error,
+}
+
+#[derive(Serialize)]
+pub struct SearchLogFlags {
+    pub file_type: Option<String>,
+    pub file_glob: Option<String>,
+    pub files_only: bool,
+    pub ignore_case: bool,
+    pub json: bool,
+    pub sym: bool,
+    pub fuzzy: bool,
+    pub max_count: usize,
+    pub context: usize,
+    pub max_context_lines: usize,
+    pub budget: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct SearchLogError {
+    pub code: &'static str,
+    pub message: String,
 }
 
 /// Appends one JSON line to `.ns/search_log.jsonl`. Fire-and-forget.
@@ -59,8 +93,13 @@ pub fn record_search_log(root: &Path, entry: SearchLogEntry) {
 
 fn record_search_log_inner(root: &Path, entry: &SearchLogEntry) -> Option<()> {
     let path = root.join(".ns").join("search_log.jsonl");
+    fs::create_dir_all(path.parent()?).ok()?;
     let line = serde_json::to_string(entry).ok()?;
-    let mut f = OpenOptions::new().create(true).append(true).open(path).ok()?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()?;
     writeln!(f, "{}", line).ok()
 }
 
@@ -137,6 +176,23 @@ mod tests {
             files: 2,
             mode: "text".to_string(),
             budget: None,
+            outcome: SearchOutcome::Success,
+            zero_results: false,
+            flags: SearchLogFlags {
+                file_type: None,
+                file_glob: None,
+                files_only: false,
+                ignore_case: false,
+                json: false,
+                sym: false,
+                fuzzy: false,
+                max_count: 10,
+                context: 1,
+                max_context_lines: 30,
+                budget: None,
+            },
+            argv: vec!["--".to_string(), "EventStore".to_string()],
+            error: None,
         };
         record_search_log(root, entry1);
 
@@ -149,6 +205,31 @@ mod tests {
             files: 1,
             mode: "json".to_string(),
             budget: Some(500),
+            outcome: SearchOutcome::NoResults,
+            zero_results: true,
+            flags: SearchLogFlags {
+                file_type: Some("rust".to_string()),
+                file_glob: Some("src/*.rs".to_string()),
+                files_only: false,
+                ignore_case: true,
+                json: true,
+                sym: false,
+                fuzzy: false,
+                max_count: 5,
+                context: 0,
+                max_context_lines: 10,
+                budget: Some(500),
+            },
+            argv: vec![
+                "--json".to_string(),
+                "-t".to_string(),
+                "rust".to_string(),
+                "Validator".to_string(),
+            ],
+            error: Some(SearchLogError {
+                code: "invalid_query",
+                message: "invalid query".to_string(),
+            }),
         };
         record_search_log(root, entry2);
 
@@ -159,10 +240,60 @@ mod tests {
         let v1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(v1["query"], "EventStore");
         assert_eq!(v1["budget"], serde_json::Value::Null);
+        assert_eq!(v1["outcome"], "success");
+        assert_eq!(v1["zero_results"], false);
+        assert!(v1["error"].is_null());
+        assert_eq!(v1["flags"]["max_count"], 10);
+        assert_eq!(v1["argv"][1], "EventStore");
 
         let v2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(v2["query"], "Validator");
         assert_eq!(v2["budget"], 500);
+        assert_eq!(v2["outcome"], "no_results");
+        assert_eq!(v2["zero_results"], true);
+        assert_eq!(v2["flags"]["file_type"], "rust");
+        assert_eq!(v2["error"]["code"], "invalid_query");
+    }
+
+    #[test]
+    fn search_log_creates_ns_dir_if_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        let entry = SearchLogEntry {
+            ts: "2026-02-13T10:30:00Z".to_string(),
+            v: "0.1.5",
+            query: "EventStore".to_string(),
+            tokens: 84,
+            lines: 12,
+            files: 2,
+            mode: "text".to_string(),
+            budget: None,
+            outcome: SearchOutcome::Error,
+            zero_results: false,
+            flags: SearchLogFlags {
+                file_type: None,
+                file_glob: None,
+                files_only: false,
+                ignore_case: false,
+                json: false,
+                sym: false,
+                fuzzy: false,
+                max_count: 10,
+                context: 1,
+                max_context_lines: 30,
+                budget: None,
+            },
+            argv: vec!["EventStore".to_string()],
+            error: Some(SearchLogError {
+                code: "no_index",
+                message: "no index found".to_string(),
+            }),
+        };
+
+        record_search_log(root, entry);
+        let log_path = root.join(".ns/search_log.jsonl");
+        assert!(log_path.exists(), "search log file should be created");
     }
 
     #[test]

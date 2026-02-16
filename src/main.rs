@@ -16,12 +16,13 @@ fn main() {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
+    let argv: Vec<String> = std::env::args().skip(1).collect();
     let cli = Cli::parse();
 
     match &cli.command {
         Some(Command::Search(sub_args)) => {
             let args = SearchArgs::from_search_sub(sub_args, &cli);
-            cmd::search::run(&args);
+            cmd::search::run(&args, &argv);
         }
         Some(Command::Index(args)) => cmd::index::run(args),
         Some(Command::Status) => cmd::status::run(),
@@ -31,7 +32,7 @@ fn main() {
             match &cli.query {
                 Some(query) => {
                     let args = SearchArgs::from_cli(&cli, query.clone());
-                    cmd::search::run(&args);
+                    cmd::search::run(&args, &argv);
                 }
                 None => {
                     // No query and no subcommand — show help

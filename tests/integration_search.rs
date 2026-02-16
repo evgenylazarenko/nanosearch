@@ -2,6 +2,8 @@ mod common;
 
 use ns::searcher::query::SearchOptions;
 use ns::searcher::OutputMode;
+use std::fs;
+use std::path::Path;
 
 /// Helper to build default SearchOptions with a given max_results.
 fn opts(max: usize) -> SearchOptions {
@@ -772,6 +774,15 @@ fn ns_binary() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_ns"))
 }
 
+fn read_search_log_entries(root: &Path) -> Vec<serde_json::Value> {
+    let content = fs::read_to_string(root.join(".ns/search_log.jsonl"))
+        .expect("search log should exist");
+    content
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each search log line should be valid JSON"))
+        .collect()
+}
+
 #[test]
 fn cli_search_without_index_stderr_and_exit_code() {
     let (_tmp, root) = common::isolated_fixture();
@@ -789,6 +800,12 @@ fn cli_search_without_index_stderr_and_exit_code() {
         "stderr should have the exact no-index message, got: {}",
         stderr
     );
+
+    let logs = read_search_log_entries(&root);
+    assert_eq!(logs.len(), 1, "one search invocation should write one log entry");
+    assert_eq!(logs[0]["outcome"], "error");
+    assert_eq!(logs[0]["error"]["code"], "no_index");
+    assert_eq!(logs[0]["query"], "anything");
 }
 
 #[test]
@@ -840,6 +857,12 @@ fn cli_no_results_exits_1_with_stderr_summary() {
         "stdout should be empty for zero-results text mode, got: {}",
         stdout
     );
+
+    let logs = read_search_log_entries(&root);
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0]["outcome"], "no_results");
+    assert_eq!(logs[0]["zero_results"], true);
+    assert_eq!(logs[0]["files"], 0);
 }
 
 #[test]
@@ -887,6 +910,13 @@ fn cli_search_success_exits_0() {
         "stdout should contain search results, got: {}",
         stdout
     );
+
+    let logs = read_search_log_entries(&root);
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0]["outcome"], "success");
+    assert_eq!(logs[0]["zero_results"], false);
+    assert_eq!(logs[0]["query"], "EventStore");
+    assert_eq!(logs[0]["mode"], "text");
 }
 
 #[test]
@@ -1042,6 +1072,78 @@ fn cli_search_subcommand_with_flags() {
         !parsed["results"].as_array().unwrap().is_empty(),
         "should have results"
     );
+
+    let logs = read_search_log_entries(&root);
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0]["outcome"], "success");
+    assert_eq!(logs[0]["flags"]["json"], true);
+    assert_eq!(logs[0]["flags"]["max_count"], 5);
+    assert_eq!(logs[0]["argv"][0], "search");
+    assert_eq!(logs[0]["argv"][1], "EventStore");
+    assert_eq!(logs[0]["argv"][2], "--json");
+    assert_eq!(logs[0]["argv"][3], "-m");
+    assert_eq!(logs[0]["argv"][4], "5");
+}
+
+#[test]
+fn cli_logs_normalized_flags_and_raw_argv() {
+    let (_tmp, root) = common::indexed_fixture();
+
+    let output = std::process::Command::new(ns_binary())
+        .args([
+            "-t",
+            "rust",
+            "-g",
+            "src/*.rs",
+            "-l",
+            "--fuzzy",
+            "--sym",
+            "-m",
+            "7",
+            "-C",
+            "2",
+            "--max-context-lines",
+            "11",
+            "--budget",
+            "500",
+            "--",
+            "EventStore",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("should run ns binary");
+
+    // Sym + fuzzy + rust filter should still match EventStore in fixture.
+    assert!(
+        output.status.success(),
+        "search should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let logs = read_search_log_entries(&root);
+    assert_eq!(logs.len(), 1);
+    let log = &logs[0];
+
+    assert_eq!(log["outcome"], "success");
+    assert_eq!(log["flags"]["file_type"], "rust");
+    assert_eq!(log["flags"]["file_glob"], "src/*.rs");
+    assert_eq!(log["flags"]["files_only"], true);
+    assert_eq!(log["flags"]["sym"], true);
+    assert_eq!(log["flags"]["fuzzy"], true);
+    assert_eq!(log["flags"]["max_count"], 7);
+    assert_eq!(log["flags"]["context"], 2);
+    assert_eq!(log["flags"]["max_context_lines"], 11);
+    assert_eq!(log["flags"]["budget"], 500);
+
+    let argv = log["argv"].as_array().expect("argv should be an array");
+    assert!(argv.len() >= 16, "argv should include all passed args");
+    assert_eq!(argv[0], "-t");
+    assert_eq!(argv[1], "rust");
+    assert_eq!(argv[2], "-g");
+    assert_eq!(argv[3], "src/*.rs");
+    assert_eq!(argv[4], "-l");
+    assert_eq!(argv[5], "--fuzzy");
+    assert_eq!(argv[6], "--sym");
 }
 
 // ── Feature 5: Explainable ranking tests ──────────────────────────────────────

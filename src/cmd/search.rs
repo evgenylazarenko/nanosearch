@@ -2,14 +2,14 @@ use std::path::PathBuf;
 
 use crate::cmd::SearchArgs;
 use crate::error::NsError;
+use crate::indexer::writer::utc_timestamp_iso8601;
 use crate::searcher;
 use crate::searcher::format::format_summary;
 use crate::searcher::query::SearchOptions;
 use crate::searcher::OutputMode;
-use crate::indexer::writer::utc_timestamp_iso8601;
 use crate::stats;
 
-pub fn run(args: &SearchArgs) {
+pub fn run(args: &SearchArgs, argv: &[String]) {
     let root = match PathBuf::from(".").canonicalize() {
         Ok(p) => p,
         Err(err) => {
@@ -61,6 +61,24 @@ pub fn run(args: &SearchArgs) {
                 }
                 // Summary to stderr — consistent with exit 1 (rg convention)
                 eprintln!("{}", format_summary(stats));
+                stats::record_search_log(
+                    &root,
+                    stats::SearchLogEntry {
+                        ts: utc_timestamp_iso8601(),
+                        v: env!("CARGO_PKG_VERSION"),
+                        query: args.query.clone(),
+                        tokens: output.len() / 4,
+                        lines: output.lines().count(),
+                        files: stats.total_results,
+                        mode: mode_str.to_string(),
+                        budget,
+                        outcome: stats::SearchOutcome::NoResults,
+                        zero_results: true,
+                        flags: args.to_log_flags(),
+                        argv: argv.to_vec(),
+                        error: None,
+                    },
+                );
                 std::process::exit(1);
             } else {
                 print!("{}", output);
@@ -72,44 +90,85 @@ pub fn run(args: &SearchArgs) {
                 }
                 eprintln!("{}", format_summary(stats));
                 stats::record_search(&root, output.len());
-                stats::record_search_log(&root, stats::SearchLogEntry {
-                    ts: utc_timestamp_iso8601(),
-                    v: env!("CARGO_PKG_VERSION"),
-                    query: args.query.clone(),
-                    tokens: output.len() / 4,
-                    lines: output.lines().count(),
-                    files: stats.total_results,
-                    mode: mode_str.to_string(),
-                    budget,
-                });
+                stats::record_search_log(
+                    &root,
+                    stats::SearchLogEntry {
+                        ts: utc_timestamp_iso8601(),
+                        v: env!("CARGO_PKG_VERSION"),
+                        query: args.query.clone(),
+                        tokens: output.len() / 4,
+                        lines: output.lines().count(),
+                        files: stats.total_results,
+                        mode: mode_str.to_string(),
+                        budget,
+                        outcome: stats::SearchOutcome::Success,
+                        zero_results: false,
+                        flags: args.to_log_flags(),
+                        argv: argv.to_vec(),
+                        error: None,
+                    },
+                );
             }
         }
         Err(err) => {
-            match &err {
+            let (error_code, stderr_message) = match &err {
                 NsError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!("error: no index found. Run 'ns index' to create one.");
+                    (
+                        "no_index",
+                        "error: no index found. Run 'ns index' to create one.".to_string(),
+                    )
                 }
                 NsError::SchemaVersionMismatch { .. } => {
-                    eprintln!(
+                    (
+                        "schema_mismatch",
                         "error: index was built with an older version of ns. Run 'ns index' to rebuild."
-                    );
+                            .to_string(),
+                    )
                 }
                 NsError::QueryParse(e) => {
-                    eprintln!("error: invalid query: {}", e);
+                    ("invalid_query", format!("error: invalid query: {}", e))
                 }
                 NsError::Glob(e) => {
-                    eprintln!("error: invalid glob pattern: {}", e);
+                    ("invalid_glob", format!("error: invalid glob pattern: {}", e))
                 }
                 NsError::Json(_) => {
-                    eprintln!("error: corrupt index metadata. Run 'ns index' to rebuild.");
+                    (
+                        "corrupt_meta",
+                        "error: corrupt index metadata. Run 'ns index' to rebuild.".to_string(),
+                    )
                 }
                 _ if err.is_lock_error() => {
-                    eprintln!("error: index is locked by another process.");
+                    (
+                        "index_locked",
+                        "error: index is locked by another process.".to_string(),
+                    )
                 }
                 _ => {
-                    eprintln!("error: search failed: {}", err);
+                    ("search_failed", format!("error: search failed: {}", err))
                 }
-            }
+            };
+            eprintln!("{}", stderr_message);
+            stats::record_search_log(
+                &root,
+                stats::SearchLogEntry {
+                    ts: utc_timestamp_iso8601(),
+                    v: env!("CARGO_PKG_VERSION"),
+                    query: args.query.clone(),
+                    tokens: 0,
+                    lines: 0,
+                    files: 0,
+                    mode: mode_str.to_string(),
+                    budget,
+                    outcome: stats::SearchOutcome::Error,
+                    zero_results: false,
+                    flags: args.to_log_flags(),
+                    argv: argv.to_vec(),
+                    error: Some(stats::SearchLogError {
+                        code: error_code,
+                        message: stderr_message,
+                    }),
+                },
+            );
             std::process::exit(1);
         }
     }

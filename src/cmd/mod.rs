@@ -5,6 +5,7 @@ pub mod status;
 
 use std::path::PathBuf;
 
+use crate::stats::SearchLogFlags;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -151,6 +152,7 @@ pub struct SearchArgs {
     pub file_type: Option<String>,
     pub file_glob: Option<String>,
     pub files_only: bool,
+    pub ignore_case: bool,
     pub max_count: usize,
     pub context: usize,
     pub json: bool,
@@ -167,6 +169,7 @@ impl SearchArgs {
             file_type: cli.file_type.clone(),
             file_glob: cli.file_glob.clone(),
             files_only: cli.files_only,
+            ignore_case: cli.ignore_case,
             max_count: cli.max_count,
             context: cli.context,
             json: cli.json,
@@ -183,6 +186,7 @@ impl SearchArgs {
             file_type: cli.file_type.clone(),
             file_glob: cli.file_glob.clone(),
             files_only: sub.files_only,
+            ignore_case: sub.ignore_case,
             max_count: sub.max_count,
             context: sub.context,
             json: sub.json,
@@ -190,6 +194,22 @@ impl SearchArgs {
             fuzzy: sub.fuzzy,
             max_context_lines: sub.max_context_lines,
             budget: sub.budget,
+        }
+    }
+
+    pub fn to_log_flags(&self) -> SearchLogFlags {
+        SearchLogFlags {
+            file_type: self.file_type.clone(),
+            file_glob: self.file_glob.clone(),
+            files_only: self.files_only,
+            ignore_case: self.ignore_case,
+            json: self.json,
+            sym: self.sym,
+            fuzzy: self.fuzzy,
+            max_count: self.max_count,
+            context: self.context,
+            max_context_lines: self.max_context_lines,
+            budget: self.budget,
         }
     }
 }
