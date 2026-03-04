@@ -1,6 +1,7 @@
 pub mod context;
 pub mod format;
 pub mod query;
+pub mod spans;
 
 use std::path::Path;
 
@@ -121,7 +122,11 @@ fn build_text_with_budget(
     let mut emitted = 0;
 
     for (i, result) in results.into_iter().enumerate() {
-        let ctx = extract_context(root, &result.path, query_str, opts.context_window, opts.max_context_lines);
+        let ctx = if opts.spans {
+            spans::extract_best_spans(root, &result.path, query_str, opts.max_context_lines)
+        } else {
+            extract_context(root, &result.path, query_str, opts.context_window, opts.max_context_lines)
+        };
         let display = DisplayResult {
             rank: i + 1,
             result,
@@ -165,7 +170,11 @@ fn build_json_with_budget(
     let mut running_chars = envelope_estimate;
 
     for (i, result) in results.into_iter().enumerate() {
-        let ctx = extract_context(root, &result.path, query_str, opts.context_window, opts.max_context_lines);
+        let ctx = if opts.spans {
+            spans::extract_best_spans(root, &result.path, query_str, opts.max_context_lines)
+        } else {
+            extract_context(root, &result.path, query_str, opts.context_window, opts.max_context_lines)
+        };
         let display = DisplayResult {
             rank: i + 1,
             result,

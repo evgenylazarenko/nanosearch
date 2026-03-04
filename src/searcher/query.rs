@@ -61,6 +61,8 @@ pub struct SearchOptions {
     pub max_context_lines: Option<usize>,
     /// Token budget for total output. None means unlimited (default).
     pub budget: Option<usize>,
+    /// Use AST-guided span extraction instead of grep-and-expand.
+    pub spans: bool,
 }
 
 impl Default for SearchOptions {
@@ -74,6 +76,7 @@ impl Default for SearchOptions {
             fuzzy: false,
             max_context_lines: Some(30),
             budget: None,
+            spans: false,
         }
     }
 }

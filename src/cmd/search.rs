@@ -48,6 +48,7 @@ pub fn run(args: &SearchArgs, argv: &[String]) {
         fuzzy: args.fuzzy,
         max_context_lines,
         budget,
+        spans: args.spans,
     };
 
     match searcher::search(&root, &args.query, output_mode, &opts) {

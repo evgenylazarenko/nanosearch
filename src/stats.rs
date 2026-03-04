@@ -197,6 +197,7 @@ pub struct SearchLogFlags {
     pub context: usize,
     pub max_context_lines: usize,
     pub budget: Option<usize>,
+    pub spans: bool,
 }
 
 #[derive(Serialize)]
@@ -211,15 +212,33 @@ pub fn record_search_log(root: &Path, entry: SearchLogEntry) {
 }
 
 fn record_search_log_inner(root: &Path, entry: &SearchLogEntry) -> Option<()> {
-    let path = root.join(".ns").join("search_log.jsonl");
-    fs::create_dir_all(path.parent()?).ok()?;
-    let line = serde_json::to_string(entry).ok()?;
-    let mut f = OpenOptions::new()
+    let ns_dir = root.join(".ns");
+    fs::create_dir_all(&ns_dir).ok()?;
+
+    let lock_path = ns_dir.join("search_log.lock");
+    let lock_file = OpenOptions::new()
         .create(true)
-        .append(true)
-        .open(path)
+        .read(true)
+        .write(true)
+        .open(lock_path)
         .ok()?;
-    writeln!(f, "{}", line).ok()
+    lock_file.lock_exclusive().ok()?;
+
+    let result = (|| {
+        let line = serde_json::to_string(entry).ok()?;
+        let path = ns_dir.join("search_log.jsonl");
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()?;
+        f.write_all(line.as_bytes()).ok()?;
+        f.write_all(b"\n").ok()?;
+        Some(())
+    })();
+
+    let _ = lock_file.unlock();
+    result
 }
 
 pub fn format_token_count(tokens: u64) -> String {
@@ -290,7 +309,7 @@ mod tests {
 
         let entry1 = SearchLogEntry {
             ts: "2026-02-13T10:30:00Z".to_string(),
-            v: "0.1.7",
+            v: "0.1.8",
             query: "EventStore".to_string(),
             tokens: 84,
             lines: 12,
@@ -311,6 +330,7 @@ mod tests {
                 context: 1,
                 max_context_lines: 30,
                 budget: None,
+                spans: false,
             },
             argv: vec!["--".to_string(), "EventStore".to_string()],
             error: None,
@@ -319,7 +339,7 @@ mod tests {
 
         let entry2 = SearchLogEntry {
             ts: "2026-02-13T10:31:00Z".to_string(),
-            v: "0.1.7",
+            v: "0.1.8",
             query: "Validator".to_string(),
             tokens: 40,
             lines: 5,
@@ -340,6 +360,7 @@ mod tests {
                 context: 0,
                 max_context_lines: 10,
                 budget: Some(500),
+                spans: false,
             },
             argv: vec![
                 "--json".to_string(),
@@ -383,7 +404,7 @@ mod tests {
 
         let entry = SearchLogEntry {
             ts: "2026-02-13T10:30:00Z".to_string(),
-            v: "0.1.7",
+            v: "0.1.8",
             query: "EventStore".to_string(),
             tokens: 84,
             lines: 12,
@@ -404,6 +425,7 @@ mod tests {
                 context: 1,
                 max_context_lines: 30,
                 budget: None,
+                spans: false,
             },
             argv: vec!["EventStore".to_string()],
             error: Some(SearchLogError {
@@ -415,6 +437,84 @@ mod tests {
         record_search_log(root, entry);
         let log_path = root.join(".ns/search_log.jsonl");
         assert!(log_path.exists(), "search log file should be created");
+    }
+
+    #[test]
+    fn search_log_is_valid_jsonl_under_concurrency() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Arc::new(dir.path().to_path_buf());
+        fs::create_dir_all(root.join(".ns")).unwrap();
+
+        let workers = 12;
+        let per_worker = 100;
+        let mut handles = Vec::new();
+
+        for worker_id in 0..workers {
+            let root = Arc::clone(&root);
+            handles.push(thread::spawn(move || {
+                for i in 0..per_worker {
+                    record_search_log(
+                        &root,
+                        SearchLogEntry {
+                            ts: "2026-02-16T20:00:00Z".to_string(),
+                            v: "0.1.8",
+                            query: format!("q{}_{}", worker_id, i),
+                            tokens: i,
+                            lines: 1,
+                            files: 1,
+                            mode: "text".to_string(),
+                            budget: None,
+                            outcome: SearchOutcome::Success,
+                            zero_results: false,
+                            flags: SearchLogFlags {
+                                file_type: None,
+                                file_glob: None,
+                                files_only: true,
+                                ignore_case: false,
+                                json: false,
+                                sym: false,
+                                fuzzy: false,
+                                max_count: 20,
+                                context: 1,
+                                max_context_lines: 30,
+                                budget: None,
+                                spans: false,
+                            },
+                            argv: vec![
+                                "-l".to_string(),
+                                "--".to_string(),
+                                format!("q{}_{}", worker_id, i),
+                            ],
+                            error: None,
+                        },
+                    );
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let content = fs::read_to_string(root.join(".ns/search_log.jsonl")).unwrap();
+        assert!(
+            !content.contains("}{\"ts\":"),
+            "log must remain newline-delimited JSON (no concatenated objects)"
+        );
+
+        let lines: Vec<&str> = content.lines().collect();
+        let expected = (workers * per_worker) as usize;
+        assert_eq!(lines.len(), expected, "all log writes must be preserved");
+
+        for line in lines {
+            let _: serde_json::Value =
+                serde_json::from_str(line).expect("each line must be valid JSON");
+        }
+
+        assert!(
+            root.join(".ns/search_log.lock").exists(),
+            "search log lock file should be created"
+        );
     }
 
     #[test]

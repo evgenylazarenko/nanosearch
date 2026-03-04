@@ -119,7 +119,7 @@ pub fn extract_context(
 
 /// Tokenizes a query string the same way tantivy's default tokenizer does:
 /// split on non-alphanumeric boundaries, lowercase each token, drop empties.
-fn tokenize_query(query: &str) -> Vec<String> {
+pub(crate) fn tokenize_query(query: &str) -> Vec<String> {
     query
         .split(|c: char| !c.is_alphanumeric())
         .filter(|s| !s.is_empty())

@@ -55,6 +55,20 @@ ns builds a local search index in `.ns/` at your repo root. Files are indexed wi
 
 The index is file-level, not line-level. This is a deliberate design choice: ripgrep returns every matching *line* independently — search `"handler"` and get 200 decontextualized lines from 50 files. ns returns the 10 most relevant *files* ranked by score, then shows a few context lines from each. The agent gets "look in these files" instead of a flood of scattered line matches. BM25 tells the agent where to look; the agent reads the file to understand it.
 
+### `--spans`: AST-guided context extraction
+
+By default, context lines are selected by finding query-term matches and expanding ±C lines around them. This works but can waste tokens on import lines and incidental mentions while missing the actual definition block.
+
+`--spans` replaces grep-and-expand with a three-phase algorithm:
+
+1. **Extract candidates** — parse the file with tree-sitter and collect semantic units: functions, structs, classes, impl blocks, etc. For unsupported languages or parse failures, generate fixed-size windows (no regression).
+2. **Score each candidate** — `score = term_hits + 5 × name_match + definition_bonus - size_penalty`. A query term in the symbol *name* scores 5× more than a term in the body. Definition nodes get a bonus over random call sites.
+3. **Greedy pack under budget** — sort candidates by score density (score ÷ lines), then select non-overlapping spans that fit within `--max-context-lines`. Tight fits are truncated first-half + last-half with a `...` gap.
+
+The result: coherent, complete code blocks — the struct definition and its impl block — instead of scattered lines from across the file. The same `--max-context-lines` budget applies, so 30 lines of targeted spans is a significant upgrade over 30 lines of grep context.
+
+`--spans` is opt-in. Without it, behavior is identical to today. The `-C` flag is ignored in spans mode (spans are whole semantic units, not hit lines needing padding).
+
 ### Language support
 
 ns indexes **all text files** in your repository — any language, any file type. Every file gets full-text BM25 search. You can search a Ruby, C++, or Haskell codebase without any special configuration.
@@ -101,6 +115,7 @@ ns -m 20 -- "store"                 # return up to 20 results
 ns -C 3 -- "handler"               # 3 lines of context around matches
 ns --budget 500 -- "handler"       # cap output at ~500 tokens
 ns --max-context-lines 10 -- "q"   # max 10 context lines per file
+ns --spans -- "EventStore"          # AST-guided context: show definition blocks, not scattered lines
 ```
 
 For simple queries that don't collide with subcommand names, `ns "query"` still works. There is also an explicit `ns search "query"` subcommand as an alternative.
@@ -119,6 +134,7 @@ For simple queries that don't collide with subcommand names, `ns "query"` still 
 | `--json` | Output as JSON |
 | `--budget <N>` | Cap total output at ~N estimated tokens (0 = unlimited) |
 | `--max-context-lines <N>` | Max context lines per file (default: 30, 0 = unlimited) |
+| `--spans` | AST-guided context: show ranked definition blocks instead of grep-and-expand lines |
 | `-i, --ignore-case` | Accepted for rg compatibility (search is always case-insensitive) |
 
 **Exit codes:** `0` = results found, `1` = no results or error.
@@ -197,6 +213,7 @@ ns mirrors ripgrep's flags where semantics overlap. If you know rg, you know ns:
 | `rg --json -- "pattern"` | `ns --json -- "pattern"` | JSON output |
 | — | `ns --sym -- "pattern"` | Symbol-only search (ns-unique) |
 | — | `ns --fuzzy -- "pattern"` | Typo tolerance (ns-unique) |
+| — | `ns --spans -- "pattern"` | AST-guided definition blocks (ns-unique) |
 
 ns is not a regex engine. If you need regex or line-level pattern matching, use rg. ns is for ranked, relevance-ordered search.
 
@@ -232,6 +249,7 @@ with symbol definitions (functions, classes, types) boosted above plain text mat
 Always use `--` before the query to separate flags from the search term:
 - `ns -- "query"` — search by relevance. Best default choice.
 - `ns --sym -- "query"` — find where a symbol is defined (function, class, type).
+- `ns --spans -- "query"` — AST-guided context: returns definition blocks instead of scattered lines. Best for understanding structure.
 - `ns -t rust -- "query"` — limit search to a specific language.
 - `ns -g "src/api/*" -- "query"` — limit search to a path pattern.
 - `ns --json -- "query"` — structured output with scores and matched symbols.
@@ -267,6 +285,7 @@ Prefer `ns` over `grep`/`rg` when looking for relevant files or symbol definitio
 
 - Find relevant files: `ns -- "query"`
 - Find definitions: `ns --sym -- "ClassName"`
+- Show definition blocks: `ns --spans -- "query"`
 - Structured results: `ns --json -- "query"`
 - Rebuild index after large changes: `ns index --incremental`
 ```

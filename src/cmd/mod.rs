@@ -64,6 +64,10 @@ pub struct Cli {
     /// Token budget for total output (approximate)
     #[arg(long = "budget")]
     pub budget: Option<usize>,
+
+    /// Use AST-guided span extraction (replaces grep-and-expand context)
+    #[arg(long = "spans")]
+    pub spans: bool,
 }
 
 #[derive(Subcommand)]
@@ -121,6 +125,10 @@ pub struct SearchSubArgs {
     /// Token budget for total output (approximate)
     #[arg(long = "budget")]
     pub budget: Option<usize>,
+
+    /// Use AST-guided span extraction (replaces grep-and-expand context)
+    #[arg(long = "spans")]
+    pub spans: bool,
 }
 
 #[derive(Parser)]
@@ -160,6 +168,7 @@ pub struct SearchArgs {
     pub fuzzy: bool,
     pub max_context_lines: usize,
     pub budget: Option<usize>,
+    pub spans: bool,
 }
 
 impl SearchArgs {
@@ -177,6 +186,7 @@ impl SearchArgs {
             fuzzy: cli.fuzzy,
             max_context_lines: cli.max_context_lines,
             budget: cli.budget,
+            spans: cli.spans,
         }
     }
 
@@ -194,6 +204,7 @@ impl SearchArgs {
             fuzzy: sub.fuzzy,
             max_context_lines: sub.max_context_lines,
             budget: sub.budget,
+            spans: sub.spans,
         }
     }
 
@@ -210,6 +221,7 @@ impl SearchArgs {
             context: self.context,
             max_context_lines: self.max_context_lines,
             budget: self.budget,
+            spans: self.spans,
         }
     }
 }
