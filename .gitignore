@@ -17,3 +17,5 @@ docs/
 AGENTS.md
 agent_specs/
 autobuild
+.skylane/
+.skylane-dev/

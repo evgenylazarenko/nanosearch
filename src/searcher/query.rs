@@ -142,10 +142,7 @@ pub fn execute_search(
         base_query
     };
 
-    let reader = index
-        .reader_builder()
-        .reload_policy(ReloadPolicy::Manual)
-        .try_into()?;
+    let reader = create_reader_with_retry(&index, root)?;
     let searcher = reader.searcher();
 
     let start = Instant::now();
@@ -241,6 +238,80 @@ pub fn execute_search(
     };
 
     Ok((results, stats))
+}
+
+/// Creates an IndexReader with retry logic for transient lock failures.
+///
+/// Tantivy's reader creation acquires `META_LOCK` to prevent GC from deleting
+/// segment files while they are being opened. This can fail transiently when:
+/// - A concurrent `ns index --incremental` (from git hooks) holds the lock during commit
+/// - `flock()` is interrupted by a signal (EINTR) — fs4 doesn't retry
+/// - A previous process crashed leaving stale lock files
+///
+/// Retry strategy: up to 3 attempts with 100ms delay. On final attempt,
+/// clean stale lock files and retry once more.
+fn create_reader_with_retry(
+    index: &tantivy::Index,
+    root: &Path,
+) -> Result<tantivy::IndexReader, NsError> {
+    let mut last_err = None;
+    for attempt in 0..4 {
+        match index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()
+        {
+            Ok(reader) => return Ok(reader),
+            Err(e) => {
+                if !matches!(&e, tantivy::TantivyError::LockFailure(..)) {
+                    return Err(NsError::Tantivy(e));
+                }
+                last_err = Some(e);
+                if attempt == 2 {
+                    // Before final attempt, try cleaning stale locks
+                    clean_stale_locks(root);
+                }
+                if attempt < 3 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    }
+    Err(NsError::Tantivy(last_err.unwrap()))
+}
+
+/// Removes Tantivy lock files if no other `ns` process holds them.
+///
+/// Tantivy lock files (`.tantivy-meta.lock`, `.tantivy-writer.lock`) use
+/// `flock()` for OS-level locking. The files persist on disk after the lock
+/// is released — their presence alone doesn't indicate an active lock.
+/// If we can acquire the lock (non-blocking), no other process holds it,
+/// and the file is stale — safe to remove.
+fn clean_stale_locks(root: &Path) {
+    let index_dir = root.join(".ns").join("index");
+    for name in &[".tantivy-meta.lock", ".tantivy-writer.lock"] {
+        let lock_path = index_dir.join(name);
+        if !lock_path.exists() {
+            continue;
+        }
+        // Try to open and acquire a non-blocking exclusive lock.
+        // If we succeed, no other process holds it — the file is stale.
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+        {
+            use fs4::fs_std::FileExt;
+            if file.try_lock_exclusive().unwrap_or(false) {
+                // We got the lock — it's stale. Release and remove.
+                let _ = file.unlock();
+                drop(file);
+                let _ = std::fs::remove_file(&lock_path);
+            }
+            // If try_lock_exclusive returns false or Err, another process
+            // genuinely holds it. Don't touch.
+        }
+    }
 }
 
 /// Tokenizes a query string: splits on whitespace and lowercases each token.

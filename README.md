@@ -207,6 +207,7 @@ ns mirrors ripgrep's flags where semantics overlap. If you know rg, you know ns:
 | `rg -- "pattern"` | `ns -- "pattern"` | Positional query |
 | `rg -t rust -- "pattern"` | `ns -t rust -- "pattern"` | Language filter |
 | `rg -g "src/**" -- "pattern"` | `ns -g "src/**" -- "pattern"` | Glob filter |
+| `rg -- "pattern" file.rs` | `ns -g "file.rs" -- "pattern"` | File paths go in `-g`, not after `--` |
 | `rg -l -- "pattern"` | `ns -l -- "pattern"` | Files only |
 | `rg -m 5 -- "pattern"` | `ns -m 5 -- "pattern"` | Max results |
 | `rg -C 3 -- "pattern"` | `ns -C 3 -- "pattern"` | Context lines |
@@ -251,7 +252,7 @@ Always use `--` before the query to separate flags from the search term:
 - `ns --sym -- "query"` — find where a symbol is defined (function, class, type).
 - `ns --spans -- "query"` — AST-guided context: returns definition blocks instead of scattered lines. Best for understanding structure.
 - `ns -t rust -- "query"` — limit search to a specific language.
-- `ns -g "src/api/*" -- "query"` — limit search to a path pattern.
+- `ns -g "src/api/*" -- "query"` — limit search to a path pattern. To target a specific file: `ns -g "path/to/file.ts" -- "query"` (file paths go in `-g`, not after `--`).
 - `ns --json -- "query"` — structured output with scores and matched symbols.
 - `ns --fuzzy -- "query"` — if exact search returns nothing, retry with typo tolerance.
 - `ns -l -- "query"` — get just file paths (useful for batch operations).

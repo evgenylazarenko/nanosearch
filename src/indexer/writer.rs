@@ -96,6 +96,13 @@ pub fn build_index(root: &Path, files: &[WalkedFile]) -> Result<FullIndexStats, 
     }
 
     writer.commit()?;
+    // wait_merging_threads() consumes the writer and blocks until all background
+    // merge threads finish. IndexWriter::drop() merely kills merge threads without
+    // waiting, which can leave .tantivy-meta.lock held briefly after the function
+    // returns — causing "index is locked" errors for large repos.
+    writer
+        .wait_merging_threads()
+        .map_err(|e| NsError::Tantivy(e))?;
 
     let elapsed = start.elapsed();
     let file_count = files.len();

@@ -91,6 +91,12 @@ pub fn run_incremental(
     }
 
     writer.commit()?;
+    // Clean shutdown: wait for merge threads to finish before releasing the index.
+    // IndexWriter::drop() kills threads without waiting, which can leave lock files
+    // held briefly — causing "index is locked" errors on concurrent searches.
+    writer
+        .wait_merging_threads()
+        .map_err(|e| crate::error::NsError::Tantivy(e))?;
 
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
